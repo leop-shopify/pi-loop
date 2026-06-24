@@ -84,8 +84,13 @@ function normalizeFile(cwd: string, raw: string, source: TargetSource) {
 
 function normalizeChecks(explicit: string[], scripts: string[], packageManager: TargetContextSnapshot["baseline"]["packageManager"]) {
   const runner = packageManager === "unknown" || packageManager === undefined ? "npm" : packageManager;
-  const scriptChecks = scripts.filter((script) => /^(test|typecheck|check|lint)$/.test(script)).map((script) => ({ name: script, command: `${runner} ${script}`, source: "package_script" as const, required: script === "test" || script === "check" }));
+  const scriptChecks = scripts.filter((script) => /^(test|typecheck|check|lint)$/.test(script)).map((script) => ({ name: script, command: scriptCommand(runner, script), source: "package_script" as const, required: script === "test" || script === "check" }));
   return unique([...explicit.map((command) => ({ name: command, command, source: "explicit" as const, required: true })), ...scriptChecks], (check) => check.command);
+}
+
+function scriptCommand(runner: string, script: string): string {
+  if (runner === "npm" && script !== "test") return `npm run ${script}`;
+  return `${runner} ${script}`;
 }
 
 function detectPackageManager(cwd: string): TargetContextSnapshot["baseline"]["packageManager"] {

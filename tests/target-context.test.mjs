@@ -23,15 +23,18 @@ test("quote-aware args parse explicit files, symbols, checks, and runs", () => {
   assert.equal(parsed.turns, 30);
 });
 
-test("target context falls back to npm for package scripts without a lockfile", () => {
+test("target context falls back to runnable npm package-script commands without a lockfile", () => {
   withTempDir((dir) => {
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { check: "node --test", lint: "eslint .", test: "node --test", typecheck: "tsc --noEmit" } }));
 
     const snapshot = buildTargetContextSnapshot({ cwd: dir, goal: "test project" });
+    const commands = snapshot.checks.map((check) => check.command).sort();
 
     assert.equal(snapshot.baseline.packageManager, "unknown");
-    assert.ok(snapshot.checks.some((check) => check.command === "npm test"));
-    assert.equal(snapshot.checks.some((check) => check.command === "unknown test"), false);
+    assert.deepEqual(commands, ["npm run check", "npm run lint", "npm run typecheck", "npm test"]);
+    assert.equal(commands.some((command) => command.startsWith("unknown ")), false);
+    assert.equal(commands.includes("npm check"), false);
+    assert.equal(commands.includes("npm typecheck"), false);
   });
 });
 
