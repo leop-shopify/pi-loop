@@ -1,13 +1,14 @@
-import { Type } from "@sinclair/typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 
-const StatusSchema = Type.Union([Type.Literal("met"), Type.Literal("partial"), Type.Literal("missing"), Type.Literal("unknown")]);
-const CheckStatusSchema = Type.Union([Type.Literal("passed"), Type.Literal("failed"), Type.Literal("not_run"), Type.Literal("unknown")]);
-const CheckKindSchema = Type.Union([Type.Literal("test"), Type.Literal("typecheck"), Type.Literal("lint"), Type.Literal("format"), Type.Literal("build"), Type.Literal("coverage"), Type.Literal("security"), Type.Literal("dependency"), Type.Literal("dependency_audit"), Type.Literal("migration_safety"), Type.Literal("ci"), Type.Literal("review")]);
-const ArtifactKindSchema = Type.Union([Type.Literal("source"), Type.Literal("test"), Type.Literal("migration"), Type.Literal("config"), Type.Literal("docs"), Type.Literal("generated"), Type.Literal("script")]);
-const RiskKindSchema = Type.Union([Type.Literal("correctness"), Type.Literal("security"), Type.Literal("authorization"), Type.Literal("data_integrity"), Type.Literal("performance"), Type.Literal("maintainability"), Type.Literal("operability")]);
-const RiskSeveritySchema = Type.Union([Type.Literal("blocker"), Type.Literal("important"), Type.Literal("minor")]);
-const ScopeSchema = Type.Union([Type.Literal("targeted"), Type.Literal("full"), Type.Literal("ci")]);
-const StopIntentSchema = Type.Union([Type.Literal("continue"), Type.Literal("claim_done"), Type.Literal("blocked")]);
+const StatusSchema = StringEnum(["met", "partial", "missing", "unknown"] as const);
+const CheckStatusSchema = StringEnum(["passed", "failed", "not_run", "unknown"] as const);
+const CheckKindSchema = StringEnum(["test", "typecheck", "lint", "format", "build", "coverage", "security", "dependency", "dependency_audit", "migration_safety", "ci", "review"] as const);
+const ArtifactKindSchema = StringEnum(["source", "test", "migration", "config", "docs", "generated", "script"] as const);
+const RiskKindSchema = StringEnum(["correctness", "security", "authorization", "data_integrity", "performance", "maintainability", "operability"] as const);
+const RiskSeveritySchema = StringEnum(["blocker", "important", "minor"] as const);
+const ScopeSchema = StringEnum(["targeted", "full", "ci"] as const);
+const StopIntentSchema = StringEnum(["continue", "claim_done", "blocked"] as const);
 
 const AttemptEvidenceSchema = Type.Object({
   rationale: Type.String(),

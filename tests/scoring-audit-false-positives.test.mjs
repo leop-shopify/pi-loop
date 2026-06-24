@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { Value } from "@sinclair/typebox/value";
+import { Value } from "typebox/value";
 import { scoreLoopResult } from "../extensions/pi-loop/scoring-heuristics.ts";
 import { ScoreLoopParams } from "../extensions/pi-loop/tool-schema.ts";
 import { strongInput } from "./helpers/scoring-fixtures.mjs";

@@ -8,9 +8,9 @@ importers:
 
   .:
     dependencies:
-      '@sinclair/typebox':
-        specifier: ^0.34.41
-        version: 0.34.49
+      typebox:
+        specifier: 1.2.14
+        version: 1.2.14
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 0.74.2
@@ -283,9 +283,6 @@ packages:
 
   '@silvia-odwyer/photon-node@0.3.4':
     resolution: {integrity: sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA==, tarball: https://registry.npmjs.org/@silvia-odwyer/photon-node/-/photon-node-0.3.4.tgz}
-
-  '@sinclair/typebox@0.34.49':
-    resolution: {integrity: sha512-brySQQs7Jtn0joV8Xh9ZV/hZb9Ozb0pmazDIASBkYKCjXrXU3mpcFahmK/z4YDhGkQvP9mWJbVyahdtU5wQA+A==, tarball: https://registry.npmjs.org/@sinclair/typebox/-/typebox-0.34.49.tgz}
 
   '@smithy/core@3.25.0':
     resolution: {integrity: sha512-TTD6el7tvKyafkXBf7XO3jLOE+qVxOTrLjp/fEGiV3BMfUHK/LfdYlQO9YgZvzxC7kqA3H/IhJXNqQgnbgjb7A==, tarball: https://registry.npmjs.org/@smithy/core/-/core-3.25.0.tgz}
@@ -995,8 +992,6 @@ snapshots:
   '@protobufjs/utf8@1.1.1': {}
 
   '@silvia-odwyer/photon-node@0.3.4': {}
-
-  '@sinclair/typebox@0.34.49': {}
 
   '@smithy/core@3.25.0':
     dependencies:

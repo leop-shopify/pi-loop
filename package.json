@@ -35,7 +35,7 @@
     "smoke": "node tests/smoke-pi-extension.mjs"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.34.41"
+    "typebox": "1.2.14"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
