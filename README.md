@@ -232,7 +232,7 @@ Structured details keep internal measurement fields for persistence and automate
 
 ### UI output
 
-The floating right-side panel renders at 60% terminal width and full terminal height. It shows runtime data, up to 15 lines of the current prompt, and the full runtime step history so the README model is visible while the loop runs:
+The floating right-side panel renders at 25% terminal width and full terminal height. It shows runtime data, a current prompt section that starts at 15 wrapped lines (3× the former 5-line prompt window) and expands into available vertical space so long prompts stay readable, and the full runtime step history so the README model is visible while the loop runs:
 
 ```text
 ╭──────────── pi-loop <status> ────────────╮

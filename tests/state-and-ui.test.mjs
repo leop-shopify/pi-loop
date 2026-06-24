@@ -187,6 +187,28 @@ test("loop widget renders a passive side-panel dashboard with data, prompt, and 
   assert.equal(lines.every((line) => visibleWidth(line) <= 52), true);
 });
 
+test("loop widget uses spare panel height for current prompt text", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "show more current prompt text",
+    targetScore: 90,
+    maxTurns: 20,
+    maxMinutes: 120,
+    startedAt: Date.now(),
+  });
+  state.currentPrompt = Array.from({ length: 24 }, (_, index) => `prompt-line-${String(index + 1).padStart(2, "0")}-token`).join(" ");
+
+  const lines = renderLoopWidget(state, 28, plainTheme, 80);
+  const promptRows = lines.filter((line) => /prompt-line-\d{2}-token/.test(line));
+  const text = lines.join("\n");
+
+  assert.equal(promptRows.length, 24);
+  assert.match(text, /prompt-line-01-token/);
+  assert.match(text, /prompt-line-15-token/);
+  assert.match(text, /prompt-line-24-token/);
+  assert.equal(lines.every((line) => visibleWidth(line) <= 28), true);
+});
+
 test("loop status reports the README runtime steps", () => {
   const state = createLoopState();
   startLoopState(state, {
@@ -310,7 +332,7 @@ test("loop panel overlay uses Pi's non-capturing right-side overlay", () => {
   const options = floatingPanelOverlayOptions();
 
   assert.equal(options.anchor, "right-center");
-  assert.equal(options.width, "60%");
+  assert.equal(options.width, "25%");
   assert.equal(options.minWidth, 36);
   assert.equal(options.maxHeight, "100%");
   assert.equal(options.nonCapturing, true);

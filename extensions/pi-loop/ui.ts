@@ -7,7 +7,8 @@ import { runtimeStepHistoryRows, type RuntimeStepRow } from "./runtime-steps.ts"
 import { elapsedMs, lastScore, type LoopRuntimeState } from "./state.ts";
 
 const PANEL_KEY = "pi-loop";
-const PROMPT_LINE_LIMIT = 15;
+const MIN_PROMPT_LINE_LIMIT = 15;
+const SECTION_FRAME_ROWS = 2;
 const STEP_HISTORY_PREVIOUS_ROWS = 15;
 const STEP_HISTORY_NEXT_ROWS = 15;
 const STEP_HISTORY_LINE_LIMIT = 30;
@@ -64,11 +65,15 @@ export function renderLoopWidget(state: LoopRuntimeState, width: number, theme: 
   const safeWidth = Math.max(1, width);
   const status = state.active ? "running" : state.stopReason ?? "stopped";
   const contentWidth = Math.max(1, safeWidth - 4);
+  const targetContentHeight = Math.max(0, (height ?? 0) - 2);
+  const data = dataLines(state, contentWidth, theme);
+  const history = stepHistoryLines(state, contentWidth, theme);
+  const promptLimit = promptLineLimitForHeight(targetContentHeight, data.length, history.length);
   const content = fitContentHeight([
-    ...section("data", dataLines(state, contentWidth, theme), contentWidth, theme),
-    ...section("current prompt", promptLines(state, contentWidth, theme), contentWidth, theme),
-    ...section("step history", stepHistoryLines(state, contentWidth, theme), contentWidth, theme),
-  ], Math.max(0, (height ?? 0) - 2), contentWidth);
+    ...section("data", data, contentWidth, theme),
+    ...section("current prompt", promptLines(state, contentWidth, theme, promptLimit), contentWidth, theme),
+    ...section("step history", history, contentWidth, theme),
+  ], targetContentHeight, contentWidth);
 
   return bordered(`pi-loop ${status}`, content, safeWidth, theme);
 }
@@ -99,13 +104,23 @@ function dataLines(state: LoopRuntimeState, width: number, theme: Theme): string
   ];
 }
 
-function promptLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
+function promptLines(state: LoopRuntimeState, width: number, theme: Theme, maxLines: number): string[] {
   const prompt = state.currentPrompt ?? state.goal ?? "Waiting for the next loop prompt.";
-  const lines = wrapPlainText(prompt, width, PROMPT_LINE_LIMIT);
+  const lines = wrapPlainText(prompt, width, maxLines);
   return lines.map((line, index) => {
-    const prefix = index === 0 ? theme.fg("muted", "> ") : theme.fg("dim", "  ");
-    return truncateToWidth(prefix + theme.fg(index === 0 ? "text" : "dim", line), width, "…", true);
+    const prefix = index === 0 ? theme.fg("muted", "> ") : theme.fg("muted", "  ");
+    return truncateToWidth(prefix + theme.fg("text", line), width, "…", true);
   });
+}
+
+function promptLineLimitForHeight(targetHeight: number, dataRows: number, historyRows: number): number {
+  if (targetHeight <= 0) return MIN_PROMPT_LINE_LIMIT;
+  const fixedRows = sectionRowCount(dataRows) + sectionRowCount(historyRows) + SECTION_FRAME_ROWS;
+  return Math.max(MIN_PROMPT_LINE_LIMIT, targetHeight - fixedRows);
+}
+
+function sectionRowCount(lineCount: number): number {
+  return lineCount + SECTION_FRAME_ROWS;
 }
 
 function stepHistoryLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {

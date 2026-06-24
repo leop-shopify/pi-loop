@@ -13,7 +13,7 @@ const panels = new Map<string, FloatingPanelEntry<unknown>>();
 export function floatingPanelOverlayOptions(): OverlayOptions {
   return {
     anchor: "right-center",
-    width: "60%",
+    width: "25%",
     minWidth: 36,
     maxHeight: "100%",
     margin: { right: 1 },
