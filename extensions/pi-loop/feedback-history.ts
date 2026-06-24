@@ -1,4 +1,5 @@
 import { COMPACT_SCORE_TREND_LIMIT, DETAILED_RECENT_ATTEMPTS, MAX_FEEDBACK_HISTORY_CHARS } from "./constants.ts";
+import { bestProgressEntry, shortProgressPercent } from "./progress.ts";
 import { bestScore, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
 
 export function formatFeedbackHistory(state: LoopRuntimeState, maxChars = MAX_FEEDBACK_HISTORY_CHARS): string {
@@ -8,9 +9,9 @@ export function formatFeedbackHistory(state: LoopRuntimeState, maxChars = MAX_FE
 }
 
 function scoreTrend(results: LoopScoreEntry[]): string {
-  if (results.length === 0) return "Score trend: none";
-  const entries = compactTrend(results).map((entry) => `r${entry.run ?? 1}t${entry.turn}:${entry.score}/${entry.targetScore}${entry.outcome ? `/${entry.outcome}` : ""}`);
-  return `Score trend: ${entries.join(", ")}`;
+  if (results.length === 0) return "Progress trend: none";
+  const entries = compactTrend(results).map((entry) => `r${entry.run ?? 1}t${entry.turn}:${shortProgressPercent(entry.progressPercent ?? null)}${entry.outcome ? `/${entry.outcome}` : ""}`);
+  return `Progress trend: ${entries.join(", ")}`;
 }
 
 function compactTrend(results: LoopScoreEntry[]): LoopScoreEntry[] {
@@ -28,10 +29,10 @@ function compactTrend(results: LoopScoreEntry[]): LoopScoreEntry[] {
 }
 
 function bestAttempt(state: LoopRuntimeState): string {
-  const best = bestScore(state);
+  const best = bestProgressEntry(state) ?? bestScore(state);
   if (!best) return "Best attempt: none";
   return [
-    `Best attempt: run ${best.run ?? 1}, turn ${best.turn}, score ${best.score}/${best.targetScore}`,
+    `Best attempt: run ${best.run ?? 1}, turn ${best.turn}, progress ${shortProgressPercent(best.progressPercent ?? null)}`,
     `Summary: ${best.summary}`,
     `Top blockers: ${best.blockers.slice(0, 3).map((blocker) => blocker.message).join("; ") || "none"}`,
     `Top next actions: ${best.nextActions.slice(0, 3).join("; ") || "none"}`,
@@ -46,7 +47,7 @@ function recentDetails(state: LoopRuntimeState): string {
 
 function formatAttempt(entry: LoopScoreEntry): string {
   const gaps = entry.categories.flatMap((category) => (category.score / category.max < 0.8 ? (category.gaps ?? [`${category.key} ${category.score}/${category.max}`]).slice(0, 1) : []));
-  return `- r${entry.run ?? 1}t${entry.turn} ${entry.score}/${entry.targetScore}: blockers ${entry.blockers.map((blocker) => blocker.message).slice(0, 2).join("; ") || "none"}; gaps ${gaps.slice(0, 3).join("; ") || "none"}`;
+  return `- r${entry.run ?? 1}t${entry.turn} ${shortProgressPercent(entry.progressPercent ?? null)}: blockers ${entry.blockers.map((blocker) => blocker.message).slice(0, 2).join("; ") || "none"}; gaps ${gaps.slice(0, 3).join("; ") || "none"}`;
 }
 
 function recurringBlockers(state: LoopRuntimeState): string {

@@ -1,6 +1,6 @@
 # pi-loop
 
-`pi-loop` is a Pi extension for bounded, score-guided software engineering loops. It keeps an agent working until the result reaches a deterministic definition of done or the configured safety limits stop the loop.
+`pi-loop` is a Pi extension for bounded, progress-guided software engineering loops. The first scored turn becomes the hidden baseline; later turns continue until they show positive percent improvement over that baseline with no blockers, or until configured safety limits stop the loop.
 
 It is meant for quality work where “looks done” is not enough: test improvement, refactors, Rails hardening, verification cleanup, review-gate fixes, and similar engineering tasks.
 
@@ -21,9 +21,9 @@ The extension adds:
 | Surface | Name | Purpose |
 | --- | --- | --- |
 | Command | `/loop` | Starts, stops, clears, and reports loop status. |
-| Tool | `score_loop_result` | Scores a loop attempt from concrete engineering evidence. |
-| UI | below-editor widget | Shows runtime, turn count, score progress, improvement, blockers, and next action. |
-| State | `.loop/log.jsonl` | Persists loop config, score entries, and stop events in the current working directory. |
+| Tool | `score_loop_result` | Records concrete engineering evidence and reports progress over the first-loop baseline. |
+| UI | below-editor widget | Shows runtime steps, turn count, baseline/progress state, blockers, and next action. |
+| State | `.loop/log.jsonl` | Persists loop config, internal measurements, progress entries, and stop events in the current working directory. Active loops are bound to the Pi session that started them. |
 
 ## Install
 
@@ -55,7 +55,7 @@ pi install -l ~/src/pi-loop
 
 ```text
 /loop <goal>
-/loop <goal> --minutes=90 --turns=30 --target=92
+/loop <goal> --minutes=90 --turns=30 --runs=2
 /loop status
 /loop off
 /loop clear
@@ -67,7 +67,7 @@ Defaults:
 | --- | --- |
 | Timebox | 60 minutes |
 | Turn limit | 20 turns |
-| Target score | 90 |
+| Run count | 1 |
 
 ## Paper model mapped to pi-loop
 
@@ -82,27 +82,27 @@ Defaults:
 | Schedule proposition | The LLM proposes transformations in a structured format. | `score_loop_result` requires `attempt.rationale` and `attempt.fullPlan` evidence for production changes, giving pi-loop a visible plan/attempt analogue without restricting all Pi tools. |
 | Response parser | Extracts the schedule from the LLM response. | TypeBox validates the `score_loop_result` input schema, including enum-safe attempt, check, artifact, risk, and review-gate evidence. |
 | Validity and legality checks | Lightweight syntax checks plus compiler legality checks. | Strict schema validation, independent evidence verification, and scoring hard caps flag or cap weak evidence and unresolved risks; pi-loop still does not formally prove arbitrary code safety. |
-| Compiler/runtime feedback | Reports invalid, illegal, solver failure, crash, or successful speedup/slowdown. | Reports typed outcome plus deterministic score/evidence feedback: score, raw score, verifier findings, category breakdown, blockers, strengths, next actions, and improvement since last turn. |
-| Optimization history | Feedback is appended to the dialogue so the next iteration can adapt. | Score entries are appended to `.loop/log.jsonl`; continuation prompts include last score, improvement, blockers, next actions, and budget. |
-| Stopping condition | Stop command or iteration limit. | Definition of done, timebox, turn limit, user stop, or repeated missing scorer calls. |
+| Compiler/runtime feedback | Reports invalid, illegal, solver failure, crash, or successful speedup/slowdown. | Reports typed outcome plus progress/evidence feedback: baseline recorded or percent improvement over baseline, verifier findings, blockers, strengths, and next actions. |
+| Optimization history | Feedback is appended to the dialogue so the next iteration can adapt. | Progress entries are appended to `.loop/log.jsonl`; continuation prompts include baseline/progress state, blockers, next actions, and budget. |
+| Stopping condition | Stop command or iteration limit. | Positive percent improvement over the first scored turn with no blockers, timebox, turn limit, user stop, or repeated missing scorer calls. |
 
 ## Runtime context steps
 
-1. `/loop <goal>` parses command input into a loop config: goal, target score, max turns, and max minutes.
-2. pi-loop builds a bounded context snapshot from the current working directory, package scripts, git state, changed files, and prior scores.
-3. The config plus context snapshot is appended to `.loop/log.jsonl` as a `config` entry.
+1. `/loop <goal>` parses command input into a loop config: goal, max turns, max runs, and max minutes.
+2. pi-loop builds a bounded context snapshot from the current working directory, package scripts, git state, changed files, and prior scored attempts.
+3. The config plus context snapshot and current Pi session id are appended to `.loop/log.jsonl` as a `config` entry.
 4. `score_loop_result` is activated for the session.
 5. A kickoff prompt is sent as a normal user message. It includes the context snapshot and asks the agent to analyze first, then work, then score.
 6. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules, and evidence requirements.
 7. On `agent_start`, pi-loop increments the turn counter and records how many score entries existed before the turn.
 8. The agent works with normal Pi tooling. pi-loop does not sandbox tools or prescribe the implementation path.
 9. Before claiming completion, the agent must call `score_loop_result` with structured attempt and evidence.
-10. The score tool verifies evidence, classifies the outcome, appends a `score` entry to `.loop/log.jsonl`, updates the widget, and returns the score report.
+10. The score tool verifies evidence, classifies the outcome, appends a progress entry to `.loop/log.jsonl`, updates the widget, and returns progress feedback. The first call records only the baseline.
 11. On `agent_end`, pi-loop checks whether the turn produced a score:
     - if not, it schedules a missing-score prompt
-    - if yes but the definition of done is not met, it schedules a continuation prompt using the last score, improvement, next actions, and remaining budget
-    - if a stop condition is met, it appends a stop event and disables the score tool
-12. On the next session start, pi-loop reconstructs active state from `.loop/log.jsonl` and resumes the widget/tool state when limits have not been reached.
+    - if this was the baseline or no positive progress was verified, it schedules a continuation prompt using blockers, next actions, and remaining budget
+    - if positive progress over baseline is verified with no blockers, or a safety limit is hit, it appends a stop event, sends a concise TL;DR summary with each loop step taken, disables the score tool, and clears the widget/status UI
+12. On the next event in the same Pi session, pi-loop reconstructs active state from `.loop/log.jsonl` and resumes the widget/tool state when limits have not been reached. A different Pi session ignores that active loop and must start its own `/loop`.
 
 ## Input structure
 
@@ -111,7 +111,7 @@ There are two inputs: the command input and the scoring input.
 ### `/loop` command input
 
 ```text
-/loop <goal> [--minutes=60] [--turns=20] [--target=90] [--runs=1]
+/loop <goal> [--minutes=60] [--turns=20] [--runs=1]
 /loop <goal> [--file=path] [--symbol=Name] [--check="pnpm test tests/foo.test.mjs"]
 ```
 
@@ -122,9 +122,9 @@ Parsed config:
   goal: string;
   maxMinutes: number;
   maxTurns: number;
-  targetScore: number;
   maxRuns: number;
   startedAt: number;
+  sessionId: string;
   targetContext: TargetContextSnapshot;
 }
 ```
@@ -133,7 +133,7 @@ Parsed config:
 
 ### `score_loop_result` tool input
 
-The scorer input is intentionally evidence-heavy. Missing fields are allowed by the schema, but missing important evidence lowers the score or triggers hard caps.
+The scorer input is intentionally evidence-heavy. Missing fields are allowed by the schema, but missing important evidence lowers the internal measurement or triggers hard caps. The internal measurement is not shown as loop progress; progress is always percent change over the first scored attempt.
 
 ```ts
 {
@@ -173,12 +173,8 @@ Important nested evidence:
 Text response shape:
 
 ```text
-Score: <score>/<target> (<continue|definition of done passed>)
+Progress: <baseline recorded|+N.N% over baseline> (<baseline recorded; continue|continue|verified improvement accepted>)
 Outcome: <typed outcome>
-Raw score: <rawScore>/100
-Improvement: <n/a|+N|-N>
-Categories:
-- <label>: <score>/<max>
 Blockers:
 - <severity>: <message>
 Verifier findings:
@@ -187,7 +183,7 @@ Next actions:
 - <action>
 ```
 
-Structured details shape:
+Structured details keep internal measurement fields for persistence and automated checks; the UI and text response do not render those fields.
 
 ```ts
 {
@@ -195,6 +191,8 @@ Structured details shape:
     score: number;
     rawScore: number;
     targetScore: number;
+    baselineScore: number | null;
+    progressPercent: number | null;
     passedDefinition: boolean;
     improvement: number | null;
     categories: Array<{ key: string; label: string; score: number; max: number; evidence: string[]; gaps: string[] }>;
@@ -223,22 +221,31 @@ Structured details shape:
 `.loop/log.jsonl` stores three entry kinds:
 
 ```ts
-{ type: "config"; schemaVersion?: 2; goal: string; targetScore: number; maxTurns: number; maxMinutes: number; maxRuns?: number; startedAt: number; targetContext?: TargetContextSnapshot }
-{ type: "score"; schemaVersion?: 2; run?: number; turn: number; globalTurn?: number; timestamp: number; summary: string; score: number; rawScore: number; targetScore: number; passedDefinition: boolean; improvement: number | null; blockers: unknown[]; strengths?: string[]; nextActions: string[]; categories: unknown[]; outcome?: string; verifierFindings?: unknown[]; attempt?: unknown; result?: unknown }
+{ type: "config"; schemaVersion?: 2; goal: string; targetScore: number; maxTurns: number; maxMinutes: number; maxRuns?: number; startedAt: number; sessionId?: string; targetContext?: TargetContextSnapshot }
+{ type: "score"; schemaVersion?: 2; run?: number; turn: number; globalTurn?: number; timestamp: number; summary: string; score: number; rawScore: number; targetScore: number; baselineScore?: number | null; progressPercent?: number | null; passedDefinition: boolean; improvement: number | null; blockers: unknown[]; strengths?: string[]; nextActions: string[]; categories: unknown[]; outcome?: string; verifierFindings?: unknown[]; attempt?: unknown; result?: unknown }
 { type: "event"; schemaVersion?: 2; timestamp: number; event: "stopped" | "run_started" | "run_stopped" | "missing_score" | "premature_stop"; reason?: string; run?: number; turn?: number; globalTurn?: number }
 ```
 
 ### UI output
 
-The below-editor widget renders:
+The below-editor widget renders the runtime flow and the recent progress table so the README model is visible while the loop runs:
 
 ```text
-pi-loop <status> time <elapsed>/<limit> turn <current>/<limit> <goal>
-done <score>/<target> <progress-bar> <percent>% improvement <delta>
-blocker: <top blocker>
+─── pi-loop <status> ─────────────────────────
+Progress: <baseline recorded|+N.N% over baseline>  best <+N.N% over baseline run n>
+Budget: time <elapsed>/<limit>m  run <current>/<max>  turn <current>/<max>  total <n>
+Goal: <goal>
+  #   status   step              detail
+  01  done     parse config      <turns> turns, <minutes>m, <runs> run(s)
+  02  done     capture context   <package-manager>, git <branch>, <check-count> checks
+  ...
+  #   run  progress     state     detail
+  1   1    baseline     baseline  next: Baseline recorded; run another loop turn...
+  2   1    +6.2%       accepted  next: <action>
+Next: <next action>
 ```
 
-If there is no blocker, the third line shows the next scorer action or reminds the agent to call `score_loop_result`.
+The runtime step table is the live version of the “Runtime context steps” section: `/loop status` prints all 12 steps, and the widget shows the currently relevant window so the interface stays readable in narrow terminals. If there is a blocker, the final line highlights the top blocker instead of the next action. When the loop finishes, pi-loop clears the widget/status UI and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
 
 ### Sequential best-of-K runs
 
@@ -247,21 +254,21 @@ If there is no blocker, the third line shows the next scorer action or reminds t
 Behavior:
 
 1. Run 1 starts with the normalized target context.
-2. If a run reaches its turn limit below target, pi-loop appends `run_stopped`, starts the next run, and asks for a genuinely different plan.
-3. If any run passes the definition of done, all remaining runs stop.
-4. If all runs exhaust, the stop reason reports the best score and run.
+2. If a run reaches its turn limit without accepted improvement, pi-loop appends `run_stopped`, starts the next run, and asks for a genuinely different plan.
+3. If any run verifies positive progress over the baseline with no blockers, all remaining runs stop.
+4. If all runs exhaust, the stop reason reports the best progress and run.
 5. `/loop off` stops all runs.
 
 ### Premature-stop handling
 
-If a turn ends without `score_loop_result`, pi-loop appends a `missing_score` event and asks the agent to score before doing more work. If the agent appears to claim completion below target, pi-loop appends `premature_stop` and treats the completion claim as rejected.
+If a turn ends without `score_loop_result`, pi-loop appends a `missing_score` event and asks the agent to record evidence before doing more work. If the agent appears to claim completion before verified improvement, pi-loop appends `premature_stop` and treats the completion claim as rejected.
 
 ## Initial example
 
 Start Pi in a repository, then run:
 
 ```text
-/loop Improve the CartCalculator discount tests so they prove behavior without mocking owned code --minutes=45 --turns=8 --target=92
+/loop Improve the CartCalculator discount tests so they prove behavior without mocking owned code --minutes=45 --turns=8
 ```
 
 Expected first turn:
@@ -367,25 +374,25 @@ pnpm typecheck
 }
 ```
 
-Possible score response:
+Possible first response:
 
 ```text
-Score: 84/92 (continue)
-Raw score: 94/100
-Improvement: n/a
+Progress: baseline recorded (baseline recorded; continue)
+Outcome: needs_iteration
 Blockers:
 - important: Non-trivial executable change has no automated review gate evidence.
 Next actions:
+- Baseline recorded; run another loop turn and verify percent improvement before stopping.
 - Automated review gates: No security or dependency review gate evidence was provided.
 ```
 
-The next turn starts from that feedback. The agent might run full CI-equivalent checks, add missing edge coverage, or resolve a blocker. Once the score reaches the target with no blocker-severity findings, the extension stops the loop.
+The next turn starts from that feedback. The agent might run full CI-equivalent checks, add missing edge coverage, or resolve a blocker. The extension stops only after a later turn verifies positive percent improvement over the first-loop baseline and has no blocker-severity findings.
 
-## Scoring model
+## Internal measurement model
 
-The scoring contract is exposed through `extensions/pi-loop/scoring-heuristics.ts`. Agents and external checker integrations should import that facade as the source of truth. The implementation is split by responsibility under `extensions/pi-loop/scoring/`.
+The evidence contract is exposed through `extensions/pi-loop/scoring-heuristics.ts`. Agents and external checker integrations should import that facade as the source of truth. The implementation is split by responsibility under `extensions/pi-loop/scoring/`.
 
-Hard-cap heuristics are plug/play rule files under `extensions/pi-loop/scoring/rules/`. A custom integration can create a `RuleRegistry`, call `.load(customRule)`, and pass that registry to `scoreLoopResult(input, registry)`.
+Hard-cap rule files live under `extensions/pi-loop/scoring/rules/`. A custom integration can create a `RuleRegistry`, call `.load(customRule)`, and pass that registry to `scoreLoopResult(input, registry)`.
 
 ```ts
 import { RuleRegistry, scoreLoopResult } from "./extensions/pi-loop/scoring-heuristics.ts";
@@ -412,7 +419,7 @@ risks
 contradictions
 ```
 
-Current category weights:
+Internal category weights:
 
 | Category | Points |
 | --- | ---: |
@@ -424,7 +431,7 @@ Current category weights:
 | Automated review gates | 10 |
 | Operational hardening | 5 |
 
-Hard caps prevent high scores when requirements are missing, attempt plans are missing, artifacts are absent or unverifiable, verification is missing, review gates are missing or failed, tests are mock-only, owned code is mocked, tests are implementation-coupled, mock status is unstated, Rails evidence contradicts touched paths, critical security/auth/data risks remain unresolved, or loop behavior is unbounded.
+Hard caps lower the internal measurement when requirements are missing, attempt plans are missing, artifacts are absent or unverifiable, verification is missing, review gates are missing or failed, tests are mock-only, owned code is mocked, tests are implementation-coupled, mock status is unstated, Rails evidence contradicts touched paths, critical security/auth/data risks remain unresolved, or loop behavior is unbounded. The user-facing loop progress is still only percent improvement over the first scored attempt.
 
 ## Runtime diagram
 
@@ -433,7 +440,7 @@ PHASE 1: CONTEXT INITIALIZATION
 
 User
   |
-  | /loop <goal> --minutes=N --turns=N --target=N
+  | /loop <goal> --minutes=N --turns=N --runs=N
   v
 +-----------------------+
 | /loop command parser  |
@@ -469,9 +476,9 @@ User
 +--------------------------------------------------+
 | Agent receives context                           |
 | - goal                                           |
-| - time/turn/score budget                         |
+| - time/turn/run budget                           |
 | - context snapshot                               |
-| - scoring rubric                                 |
+| - evidence contract                              |
 | - hard rules                                     |
 | - instruction to analyze before implementation   |
 +--------------------------------------------------+
@@ -506,29 +513,29 @@ PHASE 2: ITERATIVE OPTIMIZATION LOOP
 +--------------------------------------------------+
 | scoreLoopResult(input)                           |
 | - independent evidence verifier                  |
-| - weighted category scores                       |
-| - plug/play heuristic rules                      |
+| - internal category measurements                 |
+| - plug/play rule files                           |
 | - hard caps                                      |
 | - blockers                                      |
 | - typed outcome                                  |
 | - verifier findings                             |
 | - next actions                                  |
-| - improvement vs previous score                  |
+| - progress vs first scored baseline              |
 +--------------------------------------------------+
   |
   +----------------------------+-------------------+
   |                            |
-  | score entry                | visible feedback
+  | progress entry             | visible feedback
   v                            v
 +-----------------------+    +--------------------------+
 | .loop/log.jsonl       |    | Below-editor widget      |
-| append score/outcome  |    | score / turns / blocker  |
+| append progress/outcome|   | progress / turns / blocker|
 +-----------------------+    +--------------------------+
   |
   v
 +--------------------------------------------------+
 | Stop check                                       |
-| - score >= target and no blocker findings        |
+| - positive progress over baseline, no blockers   |
 | - timebox reached                                |
 | - current run turn limit reached                 |
 | - all runs exhausted                             |

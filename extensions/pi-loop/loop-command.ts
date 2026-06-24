@@ -55,11 +55,12 @@ export function registerLoopCommand(pi: ExtensionAPI, controller: LoopController
         maxMinutes: parsed.minutes,
         maxRuns: parsed.runs,
         targetContext,
+        sessionId: controller.sessionKey(ctx),
       });
       appendLogEntry(ctx.cwd, config);
       controller.setScoreToolActive(true);
       updateLoopWidget(ctx, state);
-      ctx.ui.notify(`pi-loop started: ${parsed.minutes} minutes, ${parsed.turns} turns per run, ${parsed.runs} run(s), target ${parsed.target}`, "info");
+      ctx.ui.notify(`pi-loop started: ${parsed.minutes} minutes, ${parsed.turns} turns per run, ${parsed.runs} run(s); first score_loop_result call records the baseline`, "info");
       controller.sendWhenReady(kickoffPrompt(state), ctx);
     },
   });
@@ -72,6 +73,7 @@ function clearLoop(state: Parameters<typeof stopLoop>[0]): void {
   state.turnsStarted = 0;
   state.totalTurnsStarted = 0;
   state.runs = [];
+  state.sessionId = null;
   state.targetContext = null;
   state.stopReason = "cleared by user";
 }

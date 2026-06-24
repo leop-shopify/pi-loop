@@ -10,5 +10,5 @@ export function classifyOutcome(input: LoopScoreInput, result: Omit<LoopScoreRes
   if ((input.risks ?? []).some((risk) => !risk.resolved && (risk.severity === "blocker" || risk.kind === "security" || risk.kind === "authorization" || risk.kind === "data_integrity"))) return "safety_blocked";
   if (result.blockers.some((blocker) => blocker.severity === "blocker")) return "safety_blocked";
   if (!result.passedDefinition) return "needs_iteration";
-  return (result.improvement ?? 0) > 0 ? "successful_improvement" : "successful_no_improvement";
+  return "successful_improvement";
 }

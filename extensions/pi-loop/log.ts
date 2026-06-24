@@ -28,16 +28,21 @@ export function readLogEntries(cwd: string): LoopLogEntry[] {
   return fs.readFileSync(filePath, "utf-8").split("\n").filter(Boolean).map(parseEntry).filter((entry): entry is LoopLogEntry => entry !== null);
 }
 
-export function reconstructLoopState(cwd: string, now: number = Date.now()): LoopRuntimeState {
+export function reconstructLoopState(cwd: string, now: number = Date.now(), sessionId?: string): LoopRuntimeState {
   const state = createLoopState();
-  for (const entry of readLogEntries(cwd)) applyLogEntry(state, entry);
+  for (const entry of readLogEntries(cwd)) applyLogEntry(state, entry, sessionId);
   const exhausted = state.currentRun >= state.maxRuns && turnLimitReached(state);
   if (state.goal && !state.stopReason && !passedDefinition(state) && !deadlineReached(state, now) && !exhausted) state.active = true;
   return state;
 }
 
-function applyLogEntry(state: LoopRuntimeState, entry: LoopLogEntry): void {
+function applyLogEntry(state: LoopRuntimeState, entry: LoopLogEntry, sessionId?: string): void {
   if (entry.type === "config") {
+    if (sessionId && entry.sessionId !== sessionId) {
+      Object.assign(state, createLoopState());
+      return;
+    }
+
     Object.assign(state, createLoopState(), {
       goal: entry.goal,
       targetScore: entry.targetScore,
@@ -45,6 +50,7 @@ function applyLogEntry(state: LoopRuntimeState, entry: LoopLogEntry): void {
       maxMinutes: entry.maxMinutes,
       maxRuns: entry.maxRuns ?? 1,
       startedAt: entry.startedAt,
+      sessionId: entry.sessionId ?? null,
       targetContext: entry.targetContext ?? entry.context ?? null,
       runs: [{ index: 1, startedAt: entry.startedAt, turnsStarted: 0 }],
     });
@@ -52,6 +58,7 @@ function applyLogEntry(state: LoopRuntimeState, entry: LoopLogEntry): void {
   }
 
   if (entry.type === "score") {
+    if (!state.goal) return;
     const normalized = { ...entry, run: entry.run ?? 1, globalTurn: entry.globalTurn ?? entry.turn };
     state.results.push(normalized);
     state.currentRun = Math.max(state.currentRun, normalized.run ?? 1);
@@ -61,6 +68,7 @@ function applyLogEntry(state: LoopRuntimeState, entry: LoopLogEntry): void {
     return;
   }
 
+  if (!state.goal) return;
   applyEventEntry(state, entry);
 }
 

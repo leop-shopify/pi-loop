@@ -22,7 +22,7 @@ test("run manager advances sequential runs and reports best score", () => {
   assert.equal(state.currentRun, 2);
   assert.equal(state.turnsStarted, 0);
   assert.equal(state.runs[0].stopReason, "turn limit reached");
-  assert.match(bestScoreReason(state), /best score 75\/95 from run 1/);
+  assert.match(bestScoreReason(state), /best progress baseline from run 1/);
 });
 
 test("total turn budget rejects oversized best-of-k loops", () => {

@@ -1,4 +1,5 @@
 import { MAX_TOTAL_TURNS } from "./constants.ts";
+import { bestProgressEntry, shortProgressPercent } from "./progress.ts";
 import { bestScore, turnLimitReached, type LoopRuntimeState } from "./state.ts";
 
 export function totalTurnBudgetExceeded(maxRuns: number, maxTurns: number): boolean {
@@ -35,9 +36,9 @@ export function bestScoreForRun(state: LoopRuntimeState, run: number) {
 }
 
 export function bestScoreReason(state: LoopRuntimeState): string {
-  const best = bestScore(state);
+  const best = bestProgressEntry(state) ?? bestScore(state);
   if (!best) return "all runs exhausted with no score";
-  return `all runs exhausted; best score ${best.score}/${best.targetScore} from run ${best.run ?? 1}`;
+  return `all runs exhausted; best progress ${shortProgressPercent(best.progressPercent ?? null)} from run ${best.run ?? 1}`;
 }
 
 export function runBudgetText(state: LoopRuntimeState): string {

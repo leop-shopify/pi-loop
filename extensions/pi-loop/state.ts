@@ -10,6 +10,7 @@ export interface LoopConfigEntry {
   maxMinutes: number;
   maxRuns?: number;
   startedAt: number;
+  sessionId?: string;
   targetContext?: TargetContextSnapshot;
   context?: TargetContextSnapshot;
 }
@@ -34,6 +35,8 @@ export interface LoopScoreEntry {
   score: number;
   rawScore: number;
   targetScore: number;
+  baselineScore?: number | null;
+  progressPercent?: number | null;
   passedDefinition: boolean;
   improvement: number | null;
   blockers: Array<{ severity: string; message: string; evidence?: string }>;
@@ -73,6 +76,7 @@ export interface LoopRuntimeState {
   currentRun: number;
   totalTurnsStarted: number;
   startedAt: number | null;
+  sessionId: string | null;
   turnsStarted: number;
   lastAgentStartScoreCount: number;
   unscoredConsecutiveTurns: number;
@@ -92,6 +96,7 @@ export interface LoopStartOptions {
   maxRuns?: number;
   startedAt?: number;
   targetContext?: TargetContextSnapshot;
+  sessionId?: string;
 }
 
 export function createLoopState(): LoopRuntimeState {
@@ -105,6 +110,7 @@ export function createLoopState(): LoopRuntimeState {
     currentRun: 1,
     totalTurnsStarted: 0,
     startedAt: null,
+    sessionId: null,
     turnsStarted: 0,
     lastAgentStartScoreCount: 0,
     unscoredConsecutiveTurns: 0,
@@ -127,10 +133,11 @@ export function startLoopState(state: LoopRuntimeState, options: LoopStartOption
     maxMinutes: options.maxMinutes,
     maxRuns: options.maxRuns ?? 1,
     startedAt,
+    sessionId: options.sessionId ?? null,
     targetContext: options.targetContext ?? null,
     runs: [{ index: 1, startedAt, turnsStarted: 0 }],
   });
-  return { type: "config", schemaVersion: 2, goal: state.goal ?? "", targetScore: state.targetScore, maxTurns: state.maxTurns, maxMinutes: state.maxMinutes, maxRuns: state.maxRuns, startedAt, targetContext: state.targetContext ?? undefined };
+  return { type: "config", schemaVersion: 2, goal: state.goal ?? "", targetScore: state.targetScore, maxTurns: state.maxTurns, maxMinutes: state.maxMinutes, maxRuns: state.maxRuns, startedAt, sessionId: state.sessionId ?? undefined, targetContext: state.targetContext ?? undefined };
 }
 
 export function elapsedMs(state: LoopRuntimeState, now: number = Date.now()): number {
@@ -158,7 +165,11 @@ export function bestScore(state: LoopRuntimeState): LoopScoreEntry | null {
 }
 
 export function previousScoreValue(state: LoopRuntimeState): number | null {
-  return lastScoreForRun(state)?.score ?? null;
+  return lastScore(state)?.score ?? null;
+}
+
+export function baselineScoreValue(state: LoopRuntimeState): number | null {
+  return state.results[0]?.score ?? null;
 }
 
 export function passedDefinition(state: LoopRuntimeState): boolean {
@@ -175,5 +186,5 @@ export function stopLoop(state: LoopRuntimeState, reason: string): void {
 }
 
 export function scoreEntryFromResult(turn: number, summary: string, result: LoopScoreResult, attempt?: AttemptEvidence, run = 1, globalTurn = turn): LoopScoreEntry {
-  return { type: "score", schemaVersion: 2, run, turn, globalTurn, timestamp: Date.now(), summary, score: result.score, rawScore: result.rawScore, targetScore: result.targetScore, passedDefinition: result.passedDefinition, improvement: result.improvement, blockers: result.blockers.map((blocker) => ({ severity: blocker.severity, message: blocker.message, evidence: blocker.evidence })), strengths: result.strengths, nextActions: result.nextActions, categories: result.categories.map((category) => ({ key: category.key, label: category.label, score: category.score, max: category.max, evidence: category.evidence, gaps: category.gaps })), outcome: result.outcome, verifierFindings: result.verifierFindings, attempt, result };
+  return { type: "score", schemaVersion: 2, run, turn, globalTurn, timestamp: Date.now(), summary, score: result.score, rawScore: result.rawScore, targetScore: result.targetScore, baselineScore: result.baselineScore, progressPercent: result.progressPercent, passedDefinition: result.passedDefinition, improvement: result.improvement, blockers: result.blockers.map((blocker) => ({ severity: blocker.severity, message: blocker.message, evidence: blocker.evidence })), strengths: result.strengths, nextActions: result.nextActions, categories: result.categories.map((category) => ({ key: category.key, label: category.label, score: category.score, max: category.max, evidence: category.evidence, gaps: category.gaps })), outcome: result.outcome, verifierFindings: result.verifierFindings, attempt, result };
 }

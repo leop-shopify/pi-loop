@@ -10,7 +10,7 @@ import { updateLoopWidget } from "./ui.ts";
 
 export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController): void {
   pi.on("session_start", async (_event, ctx) => {
-    const restored = reconstructLoopState(ctx.cwd);
+    const restored = reconstructLoopState(ctx.cwd, Date.now(), controller.sessionKey(ctx));
     controller.clearSession(ctx);
     Object.assign(controller.getState(ctx), restored);
     controller.setScoreToolActive(restored.active);
@@ -65,7 +65,7 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     const last = state.results[state.results.length - 1];
     if (claimedCompletion && !last?.passedDefinition) {
       state.prematureStopCount++;
-      appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "premature_stop", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, score: last?.score, targetScore: last?.targetScore, reason: "completion claim below target" });
+      appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "premature_stop", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, score: last?.score, targetScore: last?.targetScore, reason: "completion claim before verified improvement" });
       controller.scheduleResume(ctx, state, `${prematureStopPrompt(state)}\n\n${continuePrompt(state)}`);
       return;
     }

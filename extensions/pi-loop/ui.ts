@@ -1,7 +1,10 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 
-import { bestScore, elapsedMs, lastScore, type LoopRuntimeState } from "./state.ts";
+import { bestProgressEntry, formatProgressPercent, progressBarPercent } from "./progress.ts";
+import { renderRuntimeStepTable } from "./runtime-steps.ts";
+import { elapsedMs, lastScore, type LoopRuntimeState } from "./state.ts";
+import { renderScoreTable } from "./ui-table.ts";
 
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -40,10 +43,10 @@ export function updateLoopWidget(ctx: ExtensionContext, state: LoopRuntimeState)
     invalidate(): void {},
   }), { placement: "belowEditor" });
 
-  const score = lastScore(state)?.score ?? null;
-  const best = bestScore(state)?.score ?? null;
+  const last = lastScore(state);
+  const best = bestProgressEntry(state);
   const status = state.active ? "running" : state.stopReason ?? "stopped";
-  ctx.ui.setStatus("pi-loop", ctx.ui.theme.fg("dim", `loop ${status}${score === null ? "" : ` ${score}/${state.targetScore}`}${best === null ? "" : ` best ${best}`}`));
+  ctx.ui.setStatus("pi-loop", ctx.ui.theme.fg("dim", `loop ${status}${last ? ` progress ${formatProgressPercent(last.progressPercent ?? null)}` : ""}${best ? ` best ${formatProgressPercent(best.progressPercent ?? null)}` : ""}`));
 }
 
 export function clearLoopWidget(ctx: ExtensionContext): void {
@@ -53,46 +56,55 @@ export function clearLoopWidget(ctx: ExtensionContext): void {
 }
 
 export function renderLoopWidget(state: LoopRuntimeState, width: number, theme: Theme): string[] {
+  const safeWidth = Math.max(1, width);
   const scoreEntry = lastScore(state);
-  const best = bestScore(state);
-  const score = scoreEntry?.score ?? null;
-  const percent = progressPercent(score, state.targetScore);
+  const best = bestProgressEntry(state);
+  const percent = progressBarPercent(scoreEntry?.progressPercent ?? null);
   const elapsed = formatElapsed(elapsedMs(state));
   const status = state.active ? "running" : state.stopReason ?? "stopped";
-  const goal = state.goal ? ` ${state.goal}` : "";
-  const title = joinToWidth([
-    theme.fg("accent", "pi-loop"),
-    theme.fg("dim", ` ${status}`),
-    theme.fg("dim", ` time ${elapsed}/${state.maxMinutes}m`),
-    theme.fg("dim", ` run ${state.currentRun}/${state.maxRuns}`),
-    theme.fg("dim", ` turn ${state.turnsStarted}/${state.maxTurns}`),
-    theme.fg("dim", ` total ${state.totalTurnsStarted}`),
-    theme.fg("dim", goal),
-  ], width);
+  const progressText = scoreEntry ? formatProgressPercent(scoreEntry.progressPercent ?? null) : "waiting for baseline";
+  const bestText = best ? `${formatProgressPercent(best.progressPercent ?? null)} run ${best.run ?? 1}` : "none";
+  const bar = progressBar(percent, Math.max(8, Math.min(24, Math.floor(safeWidth / 4))), theme);
+  const goal = state.goal ? truncateToWidth(state.goal, Math.max(12, safeWidth - 8), "…", true) : "none";
 
-  const scoreText = score === null ? "unscored" : `${score}/${state.targetScore}`;
-  const bar = progressBar(percent, Math.max(8, Math.min(24, Math.floor(width / 4))), theme);
-  const improvement = improvementText(scoreEntry?.improvement ?? null);
-  const bestText = best ? ` best ${best.score}/${best.targetScore}` : "";
-  const line = joinToWidth([
-    theme.fg("muted", "done "),
-    theme.fg(score !== null && score >= state.targetScore ? "success" : "warning", scoreText),
-    theme.fg("dim", bestText),
-    theme.fg("dim", ` ${bar} ${percent}%`),
-    theme.fg("muted", " improvement "),
-    theme.fg(improvement.startsWith("+") ? "success" : improvement === "n/a" ? "dim" : "warning", improvement),
-  ], width);
+  return [
+    titleLine(`pi-loop ${status}`, safeWidth, theme),
+    joinToWidth([
+      theme.fg("muted", "Progress: "),
+      theme.fg(scoreEntry?.passedDefinition ? "success" : "warning", progressText),
+      theme.fg("dim", `  best ${bestText}`),
+      theme.fg("dim", `  ${bar}`),
+    ], safeWidth),
+    joinToWidth([
+      theme.fg("muted", "Budget: "),
+      theme.fg("dim", `time ${elapsed}/${state.maxMinutes}m`),
+      theme.fg("dim", `  run ${state.currentRun}/${state.maxRuns}`),
+      theme.fg("dim", `  turn ${state.turnsStarted}/${state.maxTurns}`),
+      theme.fg("dim", `  total ${state.totalTurnsStarted}`),
+    ], safeWidth),
+    truncateToWidth(`${theme.fg("muted", "Goal: ")}${theme.fg("dim", goal)}`, safeWidth, "…", true),
+    ...renderRuntimeStepTable(state, safeWidth, theme, safeWidth < 95 ? 5 : 7),
+    ...renderScoreTable(state, safeWidth, theme),
+    detailLine(state, scoreEntry, safeWidth, theme),
+  ];
+}
 
+function titleLine(title: string, width: number, theme: Theme): string {
+  const label = ` ${title} `;
+  const fill = Math.max(0, width - visibleWidth(label) - 3);
+  return truncateToWidth(`${theme.fg("dim", "───")}${theme.fg("accent", label)}${theme.fg("dim", "─".repeat(fill))}`, width, "…", true);
+}
+
+function detailLine(state: LoopRuntimeState, scoreEntry: ReturnType<typeof lastScore>, width: number, theme: Theme): string {
   const blockers = scoreEntry?.blockers?.filter((blocker) => blocker.severity === "blocker") ?? [];
   const next = scoreEntry?.nextActions?.[0];
-  const premature = state.prematureStopCount > 0 ? ` premature stops ${state.prematureStopCount}` : "";
+  const premature = state.prematureStopCount > 0 ? `  premature stops ${state.prematureStopCount}` : "";
   const detail = blockers.length > 0
-    ? theme.fg("error", `blocker: ${blockers[0].message}${premature}`)
+    ? theme.fg("error", `Top blocker: ${blockers[0].message}${premature}`)
     : next
-      ? theme.fg("dim", `next: ${next}${premature}`)
+      ? theme.fg("dim", `Next: ${next}${premature}`)
       : theme.fg("dim", `score_loop_result required at the end of each loop turn${premature}`);
-
-  return [truncateToWidth(title, width, "…", true), truncateToWidth(line, width, "…", true), truncateToWidth(detail, width, "…", true)];
+  return truncateToWidth(detail, width, "…", true);
 }
 
 function progressBar(percent: number, width: number, theme: Theme): string {

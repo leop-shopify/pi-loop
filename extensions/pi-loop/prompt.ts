@@ -18,7 +18,7 @@ export function kickoffPrompt(state: LoopRuntimeState): string {
 
 export function continuePrompt(state: LoopRuntimeState): string {
   const last = state.results[state.results.length - 1];
-  const scoreLine = last ? `Last score: ${last.score}/${last.targetScore}. Improvement: ${formatImprovement(last.improvement)}.` : "No score has been recorded yet.";
+  const scoreLine = last ? `Last progress: ${formatProgress(last.progressPercent ?? null)}.` : "No baseline has been recorded yet; the first score_loop_result call records it.";
   const nextActions = last?.nextActions.length ? `Next actions from scorer:\n${last.nextActions.map((action) => `- ${action}`).join("\n")}` : "Next action: produce concrete evidence and score this loop attempt.";
   const blockers = last?.blockers.length ? `Blockers from scorer:\n${last.blockers.map((blocker) => `- ${blocker.severity}: ${blocker.message}`).join("\n")}` : "Blockers from scorer: none";
 
@@ -31,7 +31,7 @@ export function continuePrompt(state: LoopRuntimeState): string {
     nextActions,
     `Budget: ${runBudgetText(state)}.`,
     "Use any Pi tools that help. Prefer real verification over claims.",
-    "At the end of this turn, call score_loop_result. The loop stops only when the scorer says the definition of done passed, or a limit is reached.",
+    "At the end of this turn, call score_loop_result. The first call only records the baseline; the loop stops only after a later turn verifies positive percent improvement over that baseline with no blocker-severity findings, or a limit is reached.",
   ].join("\n\n");
 }
 
@@ -61,7 +61,7 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
     `Goal: ${state.goal ?? ""}`,
     `Limits: ${state.maxMinutes} minutes, ${state.maxTurns} turns per run, and ${state.maxRuns} run(s). Defaults are 60 minutes, 20 turns, and 1 run unless the user configured otherwise.`,
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
-    "A loop turn starts when the agent begins work and ends when it reports a score. The extension may restart the loop when the score is below the target.",
+    "A loop turn starts when the agent begins work and ends when it reports evidence through score_loop_result. The extension treats the first scored turn as a hidden baseline and resumes until a later turn verifies percent improvement or a limit is reached.",
     "You may use any active Pi tools needed to solve the goal. The extension does not sandbox your tool choices, so be disciplined and produce evidence.",
     "You must call score_loop_result before presenting a completion claim.",
     "Include attempt.rationale and attempt.fullPlan so the extension can validate the current plan before accepting the score.",
@@ -70,7 +70,7 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
   ].join("\n");
 }
 
-function formatImprovement(value: number | null): string {
-  if (value === null) return "n/a";
-  return value > 0 ? `+${value}` : String(value);
+function formatProgress(value: number | null): string {
+  if (value === null) return "baseline recorded";
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}% over baseline`;
 }

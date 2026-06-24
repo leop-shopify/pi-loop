@@ -16,7 +16,7 @@ async function withTempDir(fn) {
   }
 }
 
-test("loop process runs from command to mocked agent score and persisted stop", async () => {
+test("loop process treats the first score as a baseline and stops only after improvement", async () => {
   await withTempDir(async (dir) => {
     writeProject(dir);
 
@@ -30,21 +30,63 @@ test("loop process runs from command to mocked agent score and persisted stop", 
     assert.match(pi.sentMessages[0].text, /scripts: test, typecheck/);
 
     await pi.events.get("agent_start")({}, ctx);
-    const response = await pi.tools.get("score_loop_result").execute("score-1", scoreParams(), new AbortController().signal, () => {}, ctx);
+    const baselineResponse = await pi.tools.get("score_loop_result").execute("score-1", weakScoreParams(), new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({}, ctx);
 
-    assert.match(response.content[0].text, /Outcome: successful_no_improvement/);
-    assert.equal(response.terminate, true);
+    assert.match(baselineResponse.content[0].text, /baseline recorded; continue/);
+    assert.match(baselineResponse.content[0].text, /Outcome: needs_iteration/);
+    assert.doesNotMatch(baselineResponse.content[0].text, /Heuristic|Raw score|Score:/);
+    assert.equal(baselineResponse.terminate, true);
+    assert.equal(pi.activeTools.includes("score_loop_result"), true);
+
+    await pi.events.get("agent_start")({}, ctx);
+    const improvedResponse = await pi.tools.get("score_loop_result").execute("score-2", scoreParams(), new AbortController().signal, () => {}, ctx);
+    await pi.events.get("agent_end")({}, ctx);
+
+    assert.match(improvedResponse.content[0].text, /Progress: \+/);
+    assert.match(improvedResponse.content[0].text, /verified improvement accepted/);
+    assert.match(improvedResponse.content[0].text, /Outcome: successful_improvement/);
+    assert.doesNotMatch(improvedResponse.content[0].text, /Heuristic|Raw score|Score:/);
     assert.equal(pi.activeTools.includes("score_loop_result"), false);
 
     const entries = readLogEntries(dir);
-    assert.deepEqual(entries.map((entry) => entry.type), ["config", "score", "event"]);
+    assert.deepEqual(entries.map((entry) => entry.type), ["config", "score", "score", "event"]);
+    assert.equal(entries[0].sessionId, "test-session");
     assert.equal(entries[0].targetContext.baseline.packageManager, "pnpm");
-    assert.equal(entries[1].outcome, "successful_no_improvement");
+    assert.equal(entries[1].outcome, "needs_iteration");
     assert.equal(entries[1].run, 1);
     assert.equal(entries[1].globalTurn, 1);
     assert.equal(entries[1].attempt.stopIntent, "claim_done");
-    assert.equal(entries[2].reason, "definition of done reached");
+    assert.equal(entries[2].outcome, "successful_improvement");
+    assert.equal(entries[2].improvement > 0, true);
+    assert.equal(entries[3].reason, "verified improvement accepted");
+
+    const finalMessage = pi.sentMessages.at(-1).text;
+    assert.match(finalMessage, /pi-loop finished/);
+    assert.match(finalMessage, /TL;DR:/);
+    assert.match(finalMessage, /Accomplished:/);
+    assert.match(finalMessage, /Loop steps:/);
+    assert.match(finalMessage, /run 1, turn 1/);
+    assert.match(finalMessage, /run 1, turn 2/);
+  });
+});
+
+test("loop clears extension UI when it finishes", async () => {
+  await withTempDir(async (dir) => {
+    writeProject(dir);
+    const pi = mockPi();
+    const ctx = mockContext(dir, true);
+    piLoopExtension(pi);
+
+    await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=2", ctx);
+    await pi.events.get("agent_start")({}, ctx);
+    await pi.tools.get("score_loop_result").execute("score-1", weakScoreParams(), new AbortController().signal, () => {}, ctx);
+    await pi.events.get("agent_end")({}, ctx);
+    await pi.events.get("agent_start")({}, ctx);
+    await pi.tools.get("score_loop_result").execute("score-2", scoreParams(), new AbortController().signal, () => {}, ctx);
+
+    assert.equal(ctx.widgetCleared, true);
+    assert.equal(ctx.statusCleared, true);
   });
 });
 
@@ -73,7 +115,7 @@ test("multi-run process advances after a failed run and stops on the best passin
     entries = readLogEntries(dir);
     assert.equal(entries.at(-2).run, 2);
     assert.equal(entries.at(-2).globalTurn, 2);
-    assert.equal(entries.at(-1).reason, "definition of done reached");
+    assert.equal(entries.at(-1).reason, "verified improvement accepted");
     assert.equal(pi.activeTools.includes("score_loop_result"), false);
   });
 });
@@ -98,7 +140,7 @@ test("missing score and premature completion claims are logged", async () => {
 
     entries = readLogEntries(dir);
     assert.equal(entries.at(-1).event, "premature_stop");
-    assert.equal(entries.at(-1).reason, "completion claim below target");
+    assert.equal(entries.at(-1).reason, "completion claim before verified improvement");
   });
 });
 
@@ -107,6 +149,10 @@ function writeProject(dir) {
   writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   writeFileSync(join(dir, "source.ts"), "export const value = 1;\n");
   writeFileSync(join(dir, "source.test.mjs"), "import 'node:assert/strict';\n");
+}
+
+function weakScoreParams() {
+  return { ...scoreParams(), requirements: [{ description: "Source behavior is verified", status: "partial", evidence: "targeted test passed, but status output not validated" }] };
 }
 
 function scoreParams() {
@@ -141,13 +187,21 @@ function mockPi() {
   };
 }
 
-function mockContext(cwd) {
-  return {
+function mockContext(cwd, hasUI = false) {
+  const ctx = {
     cwd,
-    hasUI: false,
-    ui: { notify() {}, setWidget() {}, setStatus() {}, theme: { fg: (_kind, value) => value } },
+    hasUI,
+    widgetCleared: false,
+    statusCleared: false,
+    ui: {
+      notify() {},
+      setWidget(_name, widget) { if (widget === undefined) ctx.widgetCleared = true; },
+      setStatus(_name, status) { if (status === undefined) ctx.statusCleared = true; },
+      theme: { fg: (_kind, value) => value },
+    },
     isIdle: () => true,
     hasPendingMessages: () => false,
     sessionManager: { getSessionId: () => "test-session" },
   };
+  return ctx;
 }

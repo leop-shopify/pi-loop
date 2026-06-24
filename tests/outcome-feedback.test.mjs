@@ -23,14 +23,14 @@ test("outcome taxonomy reports failed required review gates", () => {
 });
 
 test("outcome taxonomy reports successful improvement", () => {
-  const result = scoreLoopResult({ ...strongInput, previousScore: 80 });
+  const result = scoreLoopResult({ ...strongInput, previousScore: 80, baselineScore: 80 });
 
   assert.equal(result.outcome, "successful_improvement");
-  assert.ok(result.improvement > 0);
+  assert.ok(result.progressPercent > 0);
 });
 
-test("outcome taxonomy reports iteration when evidence is valid but score is below target", () => {
-  const result = scoreLoopResult({ ...strongInput, requirements: [{ description: "important thing", status: "missing" }] });
+test("outcome taxonomy reports iteration when there is no verified improvement", () => {
+  const result = scoreLoopResult({ ...strongInput, previousScore: 99, baselineScore: 100, targetScore: 1 });
 
   assert.equal(result.outcome, "needs_iteration");
 });

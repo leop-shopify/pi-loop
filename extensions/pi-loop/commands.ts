@@ -1,6 +1,8 @@
 import { DEFAULT_MINUTES, DEFAULT_RUNS, DEFAULT_TARGET, DEFAULT_TURNS, MAX_RUNS } from "./constants.ts";
 import { loopLogPath } from "./paths.ts";
-import { bestScore, type LoopRuntimeState } from "./state.ts";
+import { bestProgressEntry, formatProgressPercent } from "./progress.ts";
+import { formatRuntimeSteps } from "./runtime-steps.ts";
+import { type LoopRuntimeState } from "./state.ts";
 
 export interface ParsedLoopArgs {
   command: "start" | "status" | "off" | "clear" | "help";
@@ -35,25 +37,27 @@ export function loopHelp(): string {
     "       /loop off",
     "       /loop clear",
     "",
-    "The loop restarts the agent while score_loop_result reports a score below the target and limits remain.",
+    "The first score is a baseline; later turns continue until score_loop_result verifies improvement or limits stop the loop.",
   ].join("\n");
 }
 
 export function statusText(state: LoopRuntimeState, cwd: string): string {
   const last = state.results[state.results.length - 1];
-  const best = bestScore(state);
+  const best = bestProgressEntry(state);
   return [
     `Active: ${state.active ? "yes" : "no"}`,
     `Goal: ${state.goal ?? "none"}`,
     `Run: ${state.currentRun}/${state.maxRuns}`,
     `Turns: ${state.turnsStarted}/${state.maxTurns} current, ${state.totalTurnsStarted} total`,
-    `Last score: ${last ? `${last.score}/${last.targetScore}` : "none"}`,
-    `Best score: ${best ? `${best.score}/${best.targetScore} run ${best.run ?? 1}` : "none"}`,
+    `Last progress: ${last ? formatProgressPercent(last.progressPercent ?? null) : "none"}`,
+    `Best progress: ${best ? `${formatProgressPercent(best.progressPercent ?? null)} run ${best.run ?? 1}` : "none"}`,
     `Premature stops: ${state.prematureStopCount}`,
     `Target files: ${state.targetContext?.files.length ? state.targetContext.files.map((file) => file.path).join(", ") : "none"}`,
     `Target checks: ${state.targetContext?.checks.length ? state.targetContext.checks.map((check) => check.command).join("; ") : "none"}`,
     `Stop reason: ${state.stopReason ?? "none"}`,
     `Log: ${loopLogPath(cwd)}`,
+    "",
+    formatRuntimeSteps(state),
   ].join("\n");
 }
 

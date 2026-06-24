@@ -47,7 +47,9 @@ export const SCORING_HEURISTICS = {
     "Missing no-god-file, single-responsibility, or boundary evidence for production changes caps the score at 85.",
     "A loop, job, or runtime implementation without explicit time and turn limits caps the score at 70.",
     "Contradictory status and exit-code evidence caps high scores.",
-    "Passing the definition of done requires score >= target and no blocker-severity findings.",
+    "The internal evidence measurement must never be used as the stop cutoff by itself.",
+    "The first scored attempt is a baseline and cannot stop the loop.",
+    "Stopping requires a later scored turn with verified positive improvement and no blocker-severity findings.",
   ],
   requiredEvidence: [
     "explicit requirements or acceptance criteria",
@@ -65,9 +67,9 @@ export const SCORING_HEURISTICS = {
 
 export function scoringRubricSummary(): string {
   return [
-    `Target score: ${DEFAULT_TARGET_SCORE}.`,
-    "Definition of done: score meets target and there are no blocker-severity findings.",
-    "Scoring categories: correctness 20, testing quality 20, design/SOLID 18, Rails engineering 15, verification/gates 12, automated review gates 10, operability 5.",
+    "Loop progress is shown as percent improvement over the first scored turn; internal measurements are not the user-facing result.",
+    "Loop stop rule: the first score_loop_result call only records the baseline; stopping requires a later turn with positive percent improvement and no blocker-severity findings.",
+    "Internal evidence categories: correctness, testing quality, design/SOLID, Rails engineering, verification/gates, automated review gates, and operability.",
     "Tests must assert externally visible behavior and cover the changed code or target bug.",
     "Mocking owned code, mock-only tests, implementation-coupled tests, and flaky sleep-based tests block high scores.",
     "Verification must include passed test or coverage check entries with command, scope, evidence, and successful exit status for executable changes.",

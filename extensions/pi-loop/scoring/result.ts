@@ -22,17 +22,22 @@ export function scoreLoopResult(input: LoopScoreInput, ruleRegistry?: RuleRegist
   const blockers = buildBlockers(input, caps, categories);
   const hardBlockers = blockers.filter((blocker) => blocker.severity === "blocker");
   const previousScore = typeof input.previousScore === "number" ? input.previousScore : null;
+  const baselineScore = typeof input.baselineScore === "number" ? input.baselineScore : null;
+  const improvement = previousScore === null ? null : score - previousScore;
+  const progress = progressOverBaseline(score, baselineScore);
 
   const result = {
     score,
     rawScore,
     targetScore,
-    passedDefinition: score >= targetScore && hardBlockers.length === 0,
-    improvement: previousScore === null ? null : score - previousScore,
+    baselineScore,
+    progressPercent: progress,
+    passedDefinition: baselineScore !== null && progress !== null && progress > 0 && hardBlockers.length === 0,
+    improvement,
     categories,
     blockers,
     strengths: buildStrengths(categories),
-    nextActions: buildNextActions(categories, blockers),
+    nextActions: buildNextActions(categories, blockers, baselineScore, progress),
     verifierFindings,
   };
 
@@ -49,6 +54,17 @@ function scoreCategories(input: LoopScoreInput): CategoryScore[] {
     scoreReviewGates(input),
     scoreOperability(input),
   ];
+}
+
+function progressOverBaseline(score: number, baselineScore: number | null): number | null {
+  if (baselineScore === null) return null;
+  if (baselineScore === 0) return score === 0 ? 0 : 100;
+  return Math.round(((score - baselineScore) / Math.abs(baselineScore)) * 1000) / 10;
+}
+
+function formatProgress(value: number | null): string {
+  if (value === null) return "n/a";
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
 }
 
 function buildBlockers(input: LoopScoreInput, caps: Cap[], categories: CategoryScore[]): ScoreBlocker[] {
@@ -86,8 +102,11 @@ function buildStrengths(categories: CategoryScore[]): string[] {
     .map((categoryScore) => `${categoryScore.label}: ${categoryScore.score}/${categoryScore.max}`);
 }
 
-function buildNextActions(categories: CategoryScore[], blockers: ScoreBlocker[]): string[] {
+function buildNextActions(categories: CategoryScore[], blockers: ScoreBlocker[], baselineScore: number | null, progress: number | null): string[] {
   const actions: string[] = [];
+
+  if (baselineScore === null) actions.push("Baseline recorded; run another loop turn and verify percent improvement before stopping.");
+  else if (progress === null || progress <= 0) actions.push(`Improve over the baseline attempt; current progress is ${formatProgress(progress)}.`);
 
   for (const blocker of blockers.filter((item) => item.severity === "blocker")) actions.push(`Resolve blocker: ${blocker.message}`);
   for (const categoryScore of categories) {

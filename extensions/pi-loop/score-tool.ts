@@ -2,17 +2,18 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { appendLogEntry } from "./log.ts";
 import type { LoopController } from "./controller.ts";
+import { formatProgressPercent } from "./progress.ts";
 import { scoreLoopResult, type LoopScoreInput } from "./scoring-heuristics.ts";
-import { deadlineReached, previousScoreValue, scoreEntryFromResult, type LoopRuntimeState } from "./state.ts";
+import { baselineScoreValue, deadlineReached, previousScoreValue, scoreEntryFromResult, type LoopRuntimeState } from "./state.ts";
 import { ScoreLoopParams } from "./tool-schema.ts";
 import { updateLoopWidget } from "./ui.ts";
 
 export function registerScoreTool(pi: ExtensionAPI, controller: LoopController): void {
   pi.registerTool({
     name: controller.scoreToolName,
-    label: "Score Loop Result",
-    description: "Score the current pi-loop attempt from concrete software engineering evidence. Use at the end of each loop turn.",
-    promptSnippet: "Score the current loop attempt against correctness, tests, design, Rails, verification, and hardening.",
+    label: "Record Loop Evidence",
+    description: "Record the current pi-loop attempt evidence. The first call becomes the hidden baseline; later calls report percent progress over that baseline.",
+    promptSnippet: "Record the current loop attempt evidence for progress-over-baseline feedback.",
     promptGuidelines: [
       "Use score_loop_result at the end of every pi-loop turn before claiming completion.",
       "Provide concrete file paths, command output, checks, and risk evidence. Missing evidence should be reported honestly.",
@@ -25,11 +26,12 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
         return { content: [{ type: "text", text: "No pi-loop goal is active. Start one with /loop <goal>." }], details: {} };
       }
 
-      const scoreParams = params as Omit<LoopScoreInput, "goal" | "previousScore" | "targetScore">;
+      const scoreParams = params as Omit<LoopScoreInput, "goal" | "previousScore" | "baselineScore" | "targetScore">;
       const result = scoreLoopResult({
         ...scoreParams,
         goal: state.goal,
         previousScore: previousScoreValue(state),
+        baselineScore: baselineScoreValue(state),
         targetScore: state.targetScore,
       }, undefined, { cwd: ctx.cwd });
       const entry = scoreEntryFromResult(Math.max(1, state.turnsStarted), scoreParams.summary, result, scoreParams.attempt, state.currentRun, Math.max(1, state.totalTurnsStarted));
@@ -48,7 +50,7 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
 }
 
 function updateAfterScore(ctx: ExtensionContext, controller: LoopController, state: LoopRuntimeState, passedDefinition: boolean): void {
-  if (passedDefinition) controller.finishLoop(ctx, state, "definition of done reached");
+  if (passedDefinition) controller.finishLoop(ctx, state, "verified improvement accepted");
   else if (deadlineReached(state)) controller.finishLoop(ctx, state, "time limit reached");
   else updateLoopWidget(ctx, state);
 }
@@ -56,17 +58,13 @@ function updateAfterScore(ctx: ExtensionContext, controller: LoopController, sta
 function formatScoreResponse(result: ReturnType<typeof scoreLoopResult>): string {
   const blockerLines = result.blockers.length ? result.blockers.map((blocker) => `- ${blocker.severity}: ${blocker.message}`).join("\n") : "none";
   const nextLines = result.nextActions.length ? result.nextActions.map((action) => `- ${action}`).join("\n") : "none";
-  const categoryLines = result.categories.map((category) => `- ${category.label}: ${category.score}/${category.max}`).join("\n");
   const findingLines = result.verifierFindings.length ? result.verifierFindings.map((finding) => `- ${finding.severity}: ${finding.message}`).join("\n") : "none";
-  const status = result.passedDefinition ? "definition of done passed" : "continue";
+  const progress = formatProgressPercent(result.progressPercent);
+  const status = result.passedDefinition ? "verified improvement accepted" : result.baselineScore === null ? "baseline recorded; continue" : "continue";
 
   return [
-    `Score: ${result.score}/${result.targetScore} (${status})`,
+    `Progress: ${progress} (${status})`,
     `Outcome: ${result.outcome}`,
-    `Raw score: ${result.rawScore}/100`,
-    `Improvement: ${result.improvement === null ? "n/a" : result.improvement > 0 ? `+${result.improvement}` : result.improvement}`,
-    "Categories:",
-    categoryLines,
     "Blockers:",
     blockerLines,
     "Verifier findings:",
@@ -87,6 +85,7 @@ function loopStateDetails(state: LoopRuntimeState) {
     currentRun: state.currentRun,
     totalTurnsStarted: state.totalTurnsStarted,
     startedAt: state.startedAt,
+    sessionId: state.sessionId,
     turnsStarted: state.turnsStarted,
     results: state.results,
     stopReason: state.stopReason,

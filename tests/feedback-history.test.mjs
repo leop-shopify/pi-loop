@@ -7,21 +7,22 @@ test("feedback history includes trend, best attempt, recent details, and recurri
   const state = {
     currentRun: 2,
     results: [
-      score(1, 1, 70, "Missing tests"),
-      score(1, 2, 80, "Missing tests"),
-      score(2, 1, 75, "Missing review gate"),
+      score(1, 1, 70, null, "Missing tests"),
+      score(1, 2, 80, 14.3, "Missing tests"),
+      score(2, 1, 75, 7.1, "Missing review gate"),
     ],
   };
 
   const text = formatFeedbackHistory(state);
 
-  assert.match(text, /Score trend: r1t1:70\/90/);
-  assert.match(text, /Best attempt: run 1, turn 2, score 80\/90/);
-  assert.match(text, /Recent detailed feedback:\n- r2t1 75\/90/);
+  assert.match(text, /Progress trend: r1t1:baseline/);
+  assert.match(text, /r1t2:\+14\.3%/);
+  assert.match(text, /Best attempt: run 1, turn 2, progress \+14\.3%/);
+  assert.match(text, /Recent detailed feedback:\n- r2t1 \+7\.1%/);
   assert.match(text, /Recurring blockers: Missing tests \(2\)/);
 });
 
-function score(run, turn, value, blocker) {
+function score(run, turn, value, progressPercent, blocker) {
   return {
     type: "score",
     run,
@@ -32,6 +33,8 @@ function score(run, turn, value, blocker) {
     score: value,
     rawScore: value,
     targetScore: 90,
+    baselineScore: 70,
+    progressPercent,
     passedDefinition: false,
     improvement: null,
     blockers: [{ severity: "blocker", message: blocker }],

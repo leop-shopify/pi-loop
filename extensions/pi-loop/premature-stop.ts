@@ -22,9 +22,9 @@ export function missingScoreReason(claimedCompletion: boolean): string {
 export function prematureStopPrompt(state: LoopRuntimeState): string {
   const last = state.results[state.results.length - 1];
   return [
-    "The previous turn claimed completion, but the last score is below target.",
-    `Last score: ${last ? `${last.score}/${last.targetScore}` : "none"}`,
-    "Treat the completion claim as rejected. Continue from the scorer feedback, resolve blockers, and call score_loop_result again before claiming completion.",
+    "The previous turn claimed completion, but the loop has not verified improvement yet.",
+    `Last progress: ${last ? (last.progressPercent === null || last.progressPercent === undefined ? "baseline recorded" : `${last.progressPercent > 0 ? "+" : ""}${last.progressPercent.toFixed(1)}% over baseline`) : "none"}`,
+    "Treat the completion claim as rejected. Continue from the scorer feedback, resolve blockers, improve on the prior score, and call score_loop_result again before claiming completion.",
   ].join("\n\n");
 }
 

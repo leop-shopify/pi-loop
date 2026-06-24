@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { RESUME_DELAY_MS } from "./constants.ts";
+import { finalLoopSummary } from "./final-summary.ts";
 import { appendLogEntry } from "./log.ts";
 import type { RuntimeStore } from "./runtime-store.ts";
 import { bestScoreReason } from "./run-manager.ts";
@@ -41,7 +42,10 @@ export function createLoopController(pi: ExtensionAPI, store: RuntimeStore, scor
     stopLoop(state, reason);
     setScoreToolActive(false);
     appendLogEntry(ctx.cwd, { type: "event", event: "stopped", timestamp: Date.now(), reason });
-    updateLoopWidget(ctx, state);
+    const summary = finalLoopSummary(state, reason);
+    clearLoopWidget(ctx);
+    if (ctx.isIdle()) pi.sendUserMessage(summary);
+    else pi.sendUserMessage(summary, { deliverAs: "followUp" });
   };
 
   return {
@@ -71,7 +75,7 @@ export function createLoopController(pi: ExtensionAPI, store: RuntimeStore, scor
     },
     enforceLimits(ctx: ExtensionContext, state: LoopRuntimeState): boolean {
       if (passedDefinition(state)) {
-        finishLoop(ctx, state, "definition of done reached");
+        finishLoop(ctx, state, "verified improvement accepted");
         return true;
       }
       if (deadlineReached(state)) {

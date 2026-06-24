@@ -151,6 +151,7 @@ export interface LoopScoreInput {
   risks?: RiskEvidence[];
   attempt?: AttemptEvidence;
   previousScore?: number | null;
+  baselineScore?: number | null;
   targetScore?: number;
 }
 
@@ -173,6 +174,8 @@ export interface LoopScoreResult {
   score: number;
   rawScore: number;
   targetScore: number;
+  baselineScore: number | null;
+  progressPercent: number | null;
   passedDefinition: boolean;
   improvement: number | null;
   categories: CategoryScore[];
