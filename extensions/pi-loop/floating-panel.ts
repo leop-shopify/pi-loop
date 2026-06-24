@@ -13,10 +13,10 @@ const panels = new Map<string, FloatingPanelEntry<unknown>>();
 export function floatingPanelOverlayOptions(): OverlayOptions {
   return {
     anchor: "right-center",
-    width: "20%",
+    width: "60%",
     minWidth: 36,
-    maxHeight: "90%",
-    margin: { top: 1, right: 1, bottom: 1 },
+    maxHeight: "100%",
+    margin: { right: 1 },
     nonCapturing: true,
     visible: (termWidth) => termWidth >= 80,
   };
@@ -77,7 +77,7 @@ function targetPanelHeight(rows: number): number {
   const options = floatingPanelOverlayOptions();
   const margin = typeof options.margin === "number" ? { top: options.margin, bottom: options.margin } : options.margin ?? {};
   const marginRows = (margin.top ?? 0) + (margin.bottom ?? 0);
-  return Math.max(1, Math.min(Math.floor(rows * 0.9), rows - marginRows));
+  return Math.max(1, rows - marginRows);
 }
 
 class FloatingPanelComponent<T> implements Component {

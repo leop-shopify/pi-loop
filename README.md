@@ -228,7 +228,7 @@ Structured details keep internal measurement fields for persistence and automate
 
 ### UI output
 
-The floating right-side panel renders at 20% terminal width and 90% terminal height. It shows runtime data, the current prompt, and bounded step history so the README model is visible while the loop runs:
+The floating right-side panel renders at 60% terminal width and full terminal height. It shows runtime data, up to 15 lines of the current prompt, and the full runtime step history so the README model is visible while the loop runs:
 
 ```text
 ╭──────────── pi-loop <status> ────────────╮
@@ -249,7 +249,7 @@ The floating right-side panel renders at 20% terminal width and 90% terminal hei
 ╰──────────────────────────────────────────╯
 ```
 
-The runtime step table is the live version of the “Runtime context steps” section: `/loop status` prints all 12 steps, and the panel shows the currently relevant window so the interface stays readable in narrow terminals. `done` is only for completed past steps; future steps render as `next`/waiting until the active step advances. When the loop finishes, pi-loop clears the widget/status UI and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
+The runtime step table is the live version of the “Runtime context steps” section: `/loop status` prints all 12 steps, and the panel shows all 12 steps in its expanded layout. `done` is only for completed past steps; future steps render as `next`/waiting until the active step advances. When the loop finishes, pi-loop clears the widget/status UI and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
 
 ### Sequential best-of-K runs
 

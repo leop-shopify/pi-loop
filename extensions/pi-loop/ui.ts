@@ -7,6 +7,10 @@ import { runtimeStepHistoryRows, type RuntimeStepRow } from "./runtime-steps.ts"
 import { elapsedMs, lastScore, type LoopRuntimeState } from "./state.ts";
 
 const PANEL_KEY = "pi-loop";
+const PROMPT_LINE_LIMIT = 15;
+const STEP_HISTORY_PREVIOUS_ROWS = 15;
+const STEP_HISTORY_NEXT_ROWS = 15;
+const STEP_HISTORY_LINE_LIMIT = 30;
 
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -97,7 +101,7 @@ function dataLines(state: LoopRuntimeState, width: number, theme: Theme): string
 
 function promptLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
   const prompt = state.currentPrompt ?? state.goal ?? "Waiting for the next loop prompt.";
-  const lines = wrapPlainText(prompt, width, 5);
+  const lines = wrapPlainText(prompt, width, PROMPT_LINE_LIMIT);
   return lines.map((line, index) => {
     const prefix = index === 0 ? theme.fg("muted", "> ") : theme.fg("dim", "  ");
     return truncateToWidth(prefix + theme.fg(index === 0 ? "text" : "dim", line), width, "…", true);
@@ -105,7 +109,9 @@ function promptLines(state: LoopRuntimeState, width: number, theme: Theme): stri
 }
 
 function stepHistoryLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
-  return runtimeStepHistoryRows(state, 5, 4).slice(0, 10).map((step) => renderHistoryStep(step, width, theme));
+  return runtimeStepHistoryRows(state, STEP_HISTORY_PREVIOUS_ROWS, STEP_HISTORY_NEXT_ROWS)
+    .slice(0, STEP_HISTORY_LINE_LIMIT)
+    .map((step) => renderHistoryStep(step, width, theme));
 }
 
 function renderHistoryStep(step: RuntimeStepRow, width: number, theme: Theme): string {

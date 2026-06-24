@@ -285,7 +285,7 @@ test("prior scores do not make resume-or-stop active during later agent work", (
   assert.match(afterWorkCurrentLines[0], /measure progress/);
 });
 
-test("loop widget keeps step history to last five, current, and next four", () => {
+test("loop widget shows the full runtime step history in the expanded panel", () => {
   const state = createLoopState();
   startLoopState(state, {
     goal: "make the side panel responsive at small terminal widths",
@@ -301,7 +301,7 @@ test("loop widget keeps step history to last five, current, and next four", () =
   const narrowLines = renderLoopWidget(state, 40, plainTheme);
   const historyLines = narrowLines.filter((line) => /\b(done|now|next)\b/.test(line));
 
-  assert.equal(historyLines.length <= 10, true);
+  assert.equal(historyLines.length, 12);
   assert.match(narrowLines.join("\n"), /> 11 now/);
   assert.equal(narrowLines.every((line) => visibleWidth(line) <= 40), true);
 });
@@ -310,9 +310,9 @@ test("loop panel overlay uses Pi's non-capturing right-side overlay", () => {
   const options = floatingPanelOverlayOptions();
 
   assert.equal(options.anchor, "right-center");
-  assert.equal(options.width, "20%");
+  assert.equal(options.width, "60%");
   assert.equal(options.minWidth, 36);
-  assert.equal(options.maxHeight, "90%");
+  assert.equal(options.maxHeight, "100%");
   assert.equal(options.nonCapturing, true);
 });
 
@@ -368,7 +368,7 @@ test("updateLoopWidget clears the old bottom widget and opens the floating panel
   const customCall = calls.find((call) => call.type === "custom");
   assert.equal(customCall.options.overlay, true);
   assert.equal(customCall.options.overlayOptions().nonCapturing, true);
-  assert.equal(renderedLines.length, 36);
+  assert.equal(renderedLines.length, 40);
 });
 
 function progressEntry(turn, progressPercent) {
