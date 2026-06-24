@@ -1,0 +1,12 @@
+export const DEFAULT_MINUTES = 60;
+export const DEFAULT_TURNS = 20;
+export const DEFAULT_TARGET = 90;
+export const DEFAULT_RUNS = 1;
+export const MAX_RUNS = 5;
+export const MAX_TOTAL_TURNS = 200;
+export const RESUME_DELAY_MS = 600;
+export const MAX_UNSCORED_REMINDERS = 2;
+export const MAX_FEEDBACK_HISTORY_CHARS = 4_000;
+export const DETAILED_RECENT_ATTEMPTS = 3;
+export const COMPACT_SCORE_TREND_LIMIT = 20;
+export const SCORE_TOOL_NAME = "score_loop_result";
