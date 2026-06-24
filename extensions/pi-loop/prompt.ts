@@ -1,7 +1,8 @@
 import { formatFeedbackHistory } from "./feedback-history.ts";
+import { refineNextActions } from "./feedback-refinement.ts";
 import { runBudgetText } from "./run-manager.ts";
 import { scoringRubricSummary } from "./scoring-heuristics.ts";
-import type { LoopRuntimeState } from "./state.ts";
+import type { LoopRuntimeState, LoopScoreEntry } from "./state.ts";
 import { formatTargetContext } from "./target-context.ts";
 
 export function kickoffPrompt(state: LoopRuntimeState): string {
@@ -19,19 +20,22 @@ export function kickoffPrompt(state: LoopRuntimeState): string {
 export function continuePrompt(state: LoopRuntimeState): string {
   const last = state.results[state.results.length - 1];
   const scoreLine = last ? `Last progress: ${formatProgress(last.progressPercent ?? null)}.` : "No baseline has been recorded yet; the first score_loop_result call records it.";
-  const nextActions = last?.nextActions.length ? `Next actions from scorer:\n${last.nextActions.map((action) => `- ${action}`).join("\n")}` : "Next action: produce concrete evidence and score this loop attempt.";
+  const nextActions = last?.nextActions.length ? `Next actions from scorer:\n${refineNextActions(last.nextActions).map((action) => `- ${action}`).join("\n")}` : "Next action: produce concrete evidence and score this loop attempt.";
   const blockers = last?.blockers.length ? `Blockers from scorer:\n${last.blockers.map((blocker) => `- ${blocker.severity}: ${blocker.message}`).join("\n")}` : "Blockers from scorer: none";
 
   return [
-    "Continue the pi-loop workflow.",
+    "Continue the pi-loop workflow with a refined prompt, not a passive retry.",
     `Goal: ${state.goal ?? ""}`,
     scoreLine,
+    refinementObservation(state),
     formatFeedbackHistory(state),
     blockers,
     nextActions,
     `Budget: ${runBudgetText(state)}.`,
+    "Strategy rule: the next attempt must differ from the previous attempt and the best prior attempt. Do not repeat the same plan, same evidence, or same checks unless you explain why that reuse is necessary.",
+    "Heuristic satisfaction is not enough. Positive progress, a new best score, or a high category score is feedback only; keep exploring until a configured limit or user stop.",
     "Use any Pi tools that help. Prefer real verification over claims.",
-    "At the end of this turn, call score_loop_result. The first call only records the baseline; the loop stops only after a later turn verifies positive percent improvement over that baseline with no blocker-severity findings, or a limit is reached.",
+    "At the end of this turn, call score_loop_result with attempt.rationale and attempt.fullPlan describing the strategy change. Set attempt.reusedPriorPlan false unless the turn is explicitly blocked.",
   ].join("\n\n");
 }
 
@@ -47,11 +51,12 @@ export function missingScorePrompt(state: LoopRuntimeState, claimedCompletion = 
 
 export function nextRunPrompt(state: LoopRuntimeState): string {
   return [
-    "Start the next pi-loop run for the same goal.",
+    "Start the next pi-loop run for the same goal with a refined strategy.",
     `Goal: ${state.goal ?? ""}`,
+    refinementObservation(state),
     `Budget: ${runBudgetText(state)}.`,
     formatFeedbackHistory(state),
-    "Use a genuinely different plan from prior failed attempts, then call score_loop_result at the end of the turn.",
+    "Use a genuinely different plan from prior attempts. State the new direction in attempt.rationale and attempt.fullPlan, then call score_loop_result at the end of the turn.",
   ].join("\n\n");
 }
 
@@ -59,15 +64,97 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
   return [
     "## pi-loop mode active",
     `Goal: ${state.goal ?? ""}`,
-    `Limits: ${state.maxMinutes} minutes, ${state.maxTurns} turns per run, and ${state.maxRuns} run(s). Defaults are 60 minutes, 20 turns, and 1 run unless the user configured otherwise.`,
+    `Limits: ${state.maxMinutes} minutes, ${state.maxTurns} turns per run, and ${state.maxRuns} run(s). Defaults are 120 minutes, 20 turns, and 1 run unless the user configured otherwise.`,
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
-    "A loop turn starts when the agent begins work and ends when it reports evidence through score_loop_result. The extension treats the first scored turn as a hidden baseline and resumes until a later turn verifies percent improvement or a limit is reached.",
+    "A loop turn starts when the agent begins work and ends when it reports evidence through score_loop_result. The extension treats the first scored turn as a hidden baseline and keeps using feedback until a configured limit or user stop is reached.",
     "You may use any active Pi tools needed to solve the goal. The extension does not sandbox your tool choices, so be disciplined and produce evidence.",
     "You must call score_loop_result before presenting a completion claim.",
-    "Include attempt.rationale and attempt.fullPlan so the extension can validate the current plan before accepting the score.",
+    "Include attempt.rationale and attempt.fullPlan so the next refined prompt can compare strategy against prior attempts.",
     "Hard rules: map requirements, list artifacts, use real passed checks, include automated review gate evidence for executable changes, assert observable behavior, do not use mock-only or implementation-coupled tests, do not mock owned code, keep responsibilities split, avoid god files, and apply Rails engineering safety when Rails code is involved.",
     scoringRubricSummary(),
   ].join("\n");
+}
+
+function refinementObservation(state: LoopRuntimeState): string {
+  const last = state.results.at(-1);
+  if (!last) return "Refined observation: no scored attempt yet. First score_loop_result call establishes the baseline.";
+  return [
+    "Refined observation from the previous attempt:",
+    whatWasTried(last),
+    whatDidNotImprove(state, last),
+    requiredNewDirection(state, last),
+  ].join("\n");
+}
+
+function whatWasTried(entry: LoopScoreEntry): string {
+  const attempt = entry.attempt;
+  const tried = attempt?.actionsTaken?.length ? attempt.actionsTaken.join("; ") : entry.summary;
+  return [
+    `What was tried: ${tried}`,
+    attempt?.fullPlan ? `Previous plan: ${attempt.fullPlan}` : undefined,
+    attempt?.rationale ? `Previous rationale: ${attempt.rationale}` : undefined,
+  ].filter(Boolean).join("\n");
+}
+
+function whatDidNotImprove(state: LoopRuntimeState, entry: LoopScoreEntry): string {
+  const previous = state.results.at(-2);
+  const priorBest = bestBeforeLast(state);
+  const signals: string[] = [];
+  if (previous && sameProgress(entry, previous)) signals.push(`Plateau/repeat signal: progress repeated the previous value (${formatProgress(entry.progressPercent ?? null)}).`);
+  if (previous && entry.score <= previous.score) signals.push(`Plateau/repeat signal: score did not improve over the previous attempt (${entry.score} <= ${previous.score}).`);
+  if (priorBest && entry.score <= priorBest.score) signals.push(`Plateau/repeat signal: score did not beat the best prior attempt (${entry.score} <= ${priorBest.score}).`);
+  if (entry.passedDefinition) signals.push("New best recorded, but this is feedback only. Do not stop just because the heuristic improved.");
+  for (const blocker of entry.blockers.slice(0, 3)) signals.push(`Blocker still present: ${blocker.severity}: ${blocker.message}`);
+  for (const finding of entry.verifierFindings?.slice(0, 3) ?? []) signals.push(`Verifier finding: ${finding.severity}: ${finding.message}`);
+  for (const gap of categoryGaps(entry).slice(0, 4)) signals.push(`Evidence gap: ${gap}`);
+  if (!signals.length) signals.push("No scorer blockers were reported, so improve by adding stronger evidence, broader checks, or a different implementation strategy rather than repeating the same proof.");
+  return ["What did not improve enough:", ...signals.map((signal) => `- ${signal}`)].join("\n");
+}
+
+function requiredNewDirection(state: LoopRuntimeState, entry: LoopScoreEntry): string {
+  const best = bestOverall(state);
+  const actions = refineNextActions(entry.nextActions).slice(0, 3).map((action) => `- ${action}`);
+  const bestLine = best ? `Best attempt to beat: run ${best.run ?? 1}, turn ${best.turn}, score ${best.score}, progress ${formatProgress(best.progressPercent ?? null)}.` : "Best attempt to beat: none yet.";
+  return [
+    "Required new direction:",
+    `- ${bestLine}`,
+    "- Choose a materially different next action before editing or testing again.",
+    "- If the last attempt plateaued, branch to a different hypothesis instead of polishing the same path.",
+    "- The next score must show new evidence or explain the blocker; repeated progress is not acceptance.",
+    ...(actions.length ? ["Scorer-suggested directions:", ...actions] : []),
+  ].join("\n");
+}
+
+function categoryGaps(entry: LoopScoreEntry): string[] {
+  return entry.categories.flatMap((category) => {
+    const ratio = category.max === 0 ? 1 : category.score / category.max;
+    if (ratio >= 0.8) return [];
+    const label = category.label ?? category.key;
+    const gap = category.gaps?.[0] ?? `${category.score}/${category.max}`;
+    return [`${label}: ${gap}`];
+  });
+}
+
+function bestBeforeLast(state: LoopRuntimeState): LoopScoreEntry | null {
+  return [...state.results.slice(0, -1)].sort(comparePromptBestEntries)[0] ?? null;
+}
+
+function bestOverall(state: LoopRuntimeState): LoopScoreEntry | null {
+  return [...state.results].sort(comparePromptBestEntries)[0] ?? null;
+}
+
+function comparePromptBestEntries(a: LoopScoreEntry, b: LoopScoreEntry): number {
+  const scoreDiff = b.score - a.score;
+  if (scoreDiff !== 0) return scoreDiff;
+  const progressDiff = (b.progressPercent ?? Number.NEGATIVE_INFINITY) - (a.progressPercent ?? Number.NEGATIVE_INFINITY);
+  if (progressDiff !== 0) return progressDiff;
+  const turnDiff = (b.globalTurn ?? b.turn) - (a.globalTurn ?? a.turn);
+  if (turnDiff !== 0) return turnDiff;
+  return b.timestamp - a.timestamp;
+}
+
+function sameProgress(current: LoopScoreEntry, previous: LoopScoreEntry): boolean {
+  return current.progressPercent === previous.progressPercent;
 }
 
 function formatProgress(value: number | null): string {

@@ -16,7 +16,7 @@ async function withTempDir(fn) {
   }
 }
 
-test("loop process treats the first score as a baseline and stops only after improvement", async () => {
+test("loop process treats scores as feedback and stops only at the configured limit", async () => {
   await withTempDir(async (dir) => {
     writeProject(dir);
 
@@ -44,7 +44,7 @@ test("loop process treats the first score as a baseline and stops only after imp
     await pi.events.get("agent_end")({}, ctx);
 
     assert.match(improvedResponse.content[0].text, /Progress: \+/);
-    assert.match(improvedResponse.content[0].text, /verified improvement accepted/);
+    assert.match(improvedResponse.content[0].text, /new best recorded; continue/);
     assert.match(improvedResponse.content[0].text, /Outcome: successful_improvement/);
     assert.doesNotMatch(improvedResponse.content[0].text, /Heuristic|Raw score|Score:/);
     assert.equal(pi.activeTools.includes("score_loop_result"), false);
@@ -59,11 +59,12 @@ test("loop process treats the first score as a baseline and stops only after imp
     assert.equal(entries[1].attempt.stopIntent, "claim_done");
     assert.equal(entries[2].outcome, "successful_improvement");
     assert.equal(entries[2].improvement > 0, true);
-    assert.equal(entries[3].reason, "verified improvement accepted");
+    assert.match(entries[3].reason, /all runs exhausted/);
 
     const finalMessage = pi.sentMessages.at(-1).text;
     assert.match(finalMessage, /pi-loop finished/);
     assert.match(finalMessage, /TL;DR:/);
+    assert.doesNotMatch(finalMessage, /Accepted/);
     assert.match(finalMessage, /Accomplished:/);
     assert.match(finalMessage, /Loop steps:/);
     assert.match(finalMessage, /run 1, turn 1/);
@@ -84,13 +85,14 @@ test("loop clears extension UI when it finishes", async () => {
     await pi.events.get("agent_end")({}, ctx);
     await pi.events.get("agent_start")({}, ctx);
     await pi.tools.get("score_loop_result").execute("score-2", scoreParams(), new AbortController().signal, () => {}, ctx);
+    await pi.events.get("agent_end")({}, ctx);
 
     assert.equal(ctx.widgetCleared, true);
     assert.equal(ctx.statusCleared, true);
   });
 });
 
-test("multi-run process advances after a failed run and stops on the best passing run", async () => {
+test("multi-run process advances after a failed run and stops when all runs are exhausted", async () => {
   await withTempDir(async (dir) => {
     writeProject(dir);
     const pi = mockPi();
@@ -115,7 +117,7 @@ test("multi-run process advances after a failed run and stops on the best passin
     entries = readLogEntries(dir);
     assert.equal(entries.at(-2).run, 2);
     assert.equal(entries.at(-2).globalTurn, 2);
-    assert.equal(entries.at(-1).reason, "verified improvement accepted");
+    assert.match(entries.at(-1).reason, /all runs exhausted/);
     assert.equal(pi.activeTools.includes("score_loop_result"), false);
   });
 });
@@ -140,7 +142,7 @@ test("missing score and premature completion claims are logged", async () => {
 
     entries = readLogEntries(dir);
     assert.equal(entries.at(-1).event, "premature_stop");
-    assert.equal(entries.at(-1).reason, "completion claim before verified improvement");
+    assert.equal(entries.at(-1).reason, "completion claim before configured loop stop");
   });
 });
 
@@ -152,13 +154,13 @@ function writeProject(dir) {
 }
 
 function weakScoreParams() {
-  return { ...scoreParams(), requirements: [{ description: "Source behavior is verified", status: "partial", evidence: "targeted test passed, but status output not validated" }] };
+  return { ...scoreParams("Run targeted tests, identify missing status evidence, and score the partial attempt."), requirements: [{ description: "Source behavior is verified", status: "partial", evidence: "targeted test passed, but status output not validated" }] };
 }
 
-function scoreParams() {
+function scoreParams(fullPlan = "Run targeted tests and typecheck, then score with artifact and review-gate evidence.") {
   return {
     summary: "Verified source behavior with real checks.",
-    attempt: { rationale: "Prove source behavior with real tests.", fullPlan: "Run targeted tests and typecheck, then score with artifact and review-gate evidence.", actionsTaken: ["ran tests", "ran typecheck"], stopIntent: "claim_done" },
+    attempt: { rationale: "Prove source behavior with real tests.", fullPlan, actionsTaken: ["ran tests", "ran typecheck"], stopIntent: "claim_done" },
     artifacts: [{ path: "source.ts", purpose: "source behavior", kind: "source" }, { path: "source.test.mjs", purpose: "behavior test", kind: "test" }],
     requirements: [{ description: "Source behavior is verified", status: "met", evidence: "targeted test passed" }],
     checks: [{ name: "tests", status: "passed", kind: "test", required: true, command: "pnpm test", exitCode: 0, evidence: "tests passed" }, { name: "typecheck", status: "passed", kind: "typecheck", required: true, command: "pnpm typecheck", exitCode: 0, evidence: "typecheck passed" }],

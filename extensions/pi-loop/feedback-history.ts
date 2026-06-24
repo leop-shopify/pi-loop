@@ -1,9 +1,10 @@
 import { COMPACT_SCORE_TREND_LIMIT, DETAILED_RECENT_ATTEMPTS, MAX_FEEDBACK_HISTORY_CHARS } from "./constants.ts";
+import { feedbackMessageKey, refineNextActions } from "./feedback-refinement.ts";
 import { bestProgressEntry, shortProgressPercent } from "./progress.ts";
 import { bestScore, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
 
 export function formatFeedbackHistory(state: LoopRuntimeState, maxChars = MAX_FEEDBACK_HISTORY_CHARS): string {
-  const sections = [scoreTrend(state.results), bestAttempt(state), recentDetails(state), recurringBlockers(state)].filter(Boolean);
+  const sections = [scoreTrend(state.results), plateauAnalysis(state.results), bestAttempt(state), recentDetails(state), recurringBlockers(state)].filter(Boolean);
   const text = sections.join("\n\n");
   return text.length <= maxChars ? text : `${text.slice(0, maxChars - 12)}\n...truncated`;
 }
@@ -28,6 +29,24 @@ function compactTrend(results: LoopScoreEntry[]): LoopScoreEntry[] {
   });
 }
 
+function plateauAnalysis(results: LoopScoreEntry[]): string {
+  if (results.length < 2) return "Plateau analysis: none";
+  const last = results.at(-1);
+  if (!last) return "Plateau analysis: none";
+  const streak = trailingProgressStreak(results, last.progressPercent ?? null);
+  if (streak < 2) return "Plateau analysis: none";
+  return `Plateau analysis: ${shortProgressPercent(last.progressPercent ?? null)} repeated for ${streak} consecutive attempts; branch to a different strategy or add new evidence.`;
+}
+
+function trailingProgressStreak(results: LoopScoreEntry[], progress: number | null): number {
+  let count = 0;
+  for (let index = results.length - 1; index >= 0; index--) {
+    if ((results[index].progressPercent ?? null) !== progress) break;
+    count++;
+  }
+  return count;
+}
+
 function bestAttempt(state: LoopRuntimeState): string {
   const best = bestProgressEntry(state) ?? bestScore(state);
   if (!best) return "Best attempt: none";
@@ -35,7 +54,7 @@ function bestAttempt(state: LoopRuntimeState): string {
     `Best attempt: run ${best.run ?? 1}, turn ${best.turn}, progress ${shortProgressPercent(best.progressPercent ?? null)}`,
     `Summary: ${best.summary}`,
     `Top blockers: ${best.blockers.slice(0, 3).map((blocker) => blocker.message).join("; ") || "none"}`,
-    `Top next actions: ${best.nextActions.slice(0, 3).join("; ") || "none"}`,
+    `Top next actions: ${refineNextActions(best.nextActions).slice(0, 3).join("; ") || "none"}`,
   ].join("\n");
 }
 
@@ -51,8 +70,15 @@ function formatAttempt(entry: LoopScoreEntry): string {
 }
 
 function recurringBlockers(state: LoopRuntimeState): string {
-  const counts = new Map<string, number>();
-  for (const entry of state.results) for (const blocker of entry.blockers) counts.set(blocker.message, (counts.get(blocker.message) ?? 0) + 1);
-  const recurring = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
-  return `Recurring blockers: ${recurring.length ? recurring.map(([message, count]) => `${message} (${count})`).join("; ") : "none"}`;
+  const counts = new Map<string, { message: string; count: number }>();
+  for (const entry of state.results) {
+    for (const blocker of entry.blockers) {
+      const key = feedbackMessageKey(blocker.message);
+      const existing = counts.get(key);
+      if (existing) existing.count++;
+      else counts.set(key, { message: blocker.message, count: 1 });
+    }
+  }
+  const recurring = [...counts.values()].sort((a, b) => b.count - a.count).slice(0, 3);
+  return `Recurring blockers: ${recurring.length ? recurring.map(({ message, count }) => `${message} (${count})`).join("; ") : "none"}`;
 }

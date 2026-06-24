@@ -24,6 +24,21 @@ export interface LoopRunState {
   bestScore?: number;
 }
 
+export interface LoopTurnDuration {
+  run: number;
+  turn: number;
+  globalTurn: number;
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+}
+
+export interface LoopContextUsageSnapshot {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
+
 export interface LoopScoreEntry {
   type: "score";
   schemaVersion?: 2;
@@ -86,6 +101,11 @@ export interface LoopRuntimeState {
   prematureStopCount: number;
   stopReason: string | null;
   targetContext: TargetContextSnapshot | null;
+  currentPrompt: string | null;
+  currentTurnStartedAt: number | null;
+  lastTurnDurationMs: number | null;
+  turnDurations: LoopTurnDuration[];
+  contextUsage: LoopContextUsageSnapshot | null;
 }
 
 export interface LoopStartOptions {
@@ -120,6 +140,11 @@ export function createLoopState(): LoopRuntimeState {
     prematureStopCount: 0,
     stopReason: null,
     targetContext: null,
+    currentPrompt: null,
+    currentTurnStartedAt: null,
+    lastTurnDurationMs: null,
+    turnDurations: [],
+    contextUsage: null,
   };
 }
 
@@ -170,10 +195,6 @@ export function previousScoreValue(state: LoopRuntimeState): number | null {
 
 export function baselineScoreValue(state: LoopRuntimeState): number | null {
   return state.results[0]?.score ?? null;
-}
-
-export function passedDefinition(state: LoopRuntimeState): boolean {
-  return lastScore(state)?.passedDefinition === true;
 }
 
 export function stopLoop(state: LoopRuntimeState, reason: string): void {

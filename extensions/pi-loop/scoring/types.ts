@@ -151,6 +151,8 @@ export interface LoopScoreInput {
   risks?: RiskEvidence[];
   attempt?: AttemptEvidence;
   previousScore?: number | null;
+  bestScore?: number | null;
+  priorAttemptPlans?: string[];
   baselineScore?: number | null;
   targetScore?: number;
 }

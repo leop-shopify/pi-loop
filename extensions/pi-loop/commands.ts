@@ -31,13 +31,13 @@ export function parseLoopArgs(args: string): ParsedLoopArgs {
 
 export function loopHelp(): string {
   return [
-    "Usage: /loop <goal> [--minutes=60] [--turns=20] [--target=90] [--runs=1]",
+    "Usage: /loop <goal> [--minutes=120] [--turns=20] [--target=90] [--runs=1]",
     "       /loop <goal> [--file=path] [--symbol=Name] [--check=\"pnpm test\"]",
     "       /loop status",
     "       /loop off",
     "       /loop clear",
     "",
-    "The first score is a baseline; later turns continue until score_loop_result verifies improvement or limits stop the loop.",
+    "The first score is a baseline; later scores are feedback. The loop stops only when limits are reached or the user stops it.",
   ].join("\n");
 }
 

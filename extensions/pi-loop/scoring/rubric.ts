@@ -40,6 +40,7 @@ export const SCORING_HEURISTICS = {
     "Failed security, dependency, authorization, or migration-safety gates cap lower than normal failures.",
     "Executable behavior changes without meaningful tests cap the score at 70 unless explicitly justified.",
     "Implementation-coupled or change-detector tests cap the score at 75.",
+    "Reusing the prior attempt plan without novel evidence cannot count as a useful improvement.",
     "Unsafe Rails migrations or backfills cap the score at 65.",
     "Unresolved security, authorization, tenancy, or data-integrity risks cap the score at 50.",
     "Unresolved correctness, security, data integrity, or authorization blockers cap the score at 60.",
@@ -49,7 +50,7 @@ export const SCORING_HEURISTICS = {
     "Contradictory status and exit-code evidence caps high scores.",
     "The internal evidence measurement must never be used as the stop cutoff by itself.",
     "The first scored attempt is a baseline and cannot stop the loop.",
-    "Stopping requires a later scored turn with verified positive improvement and no blocker-severity findings.",
+    "Score improvements are observations, not stop conditions; the loop stops on configured limits, user stop, or repeated missing scorer calls."
   ],
   requiredEvidence: [
     "explicit requirements or acceptance criteria",
@@ -68,7 +69,7 @@ export const SCORING_HEURISTICS = {
 export function scoringRubricSummary(): string {
   return [
     "Loop progress is shown as percent improvement over the first scored turn; internal measurements are not the user-facing result.",
-    "Loop stop rule: the first score_loop_result call only records the baseline; stopping requires a later turn with positive percent improvement and no blocker-severity findings.",
+    "Loop stop rule: score_loop_result provides feedback only; the loop keeps exploring until configured time/turn/run limits, user stop, or repeated missing scorer calls.",
     "Internal evidence categories: correctness, testing quality, design/SOLID, Rails engineering, verification/gates, automated review gates, and operability.",
     "Tests must assert externally visible behavior and cover the changed code or target bug.",
     "Mocking owned code, mock-only tests, implementation-coupled tests, and flaky sleep-based tests block high scores.",

@@ -10,6 +10,14 @@ export interface RuntimeStepRow {
   detail: string;
 }
 
+interface RuntimeStepDraft {
+  index: number;
+  label: string;
+  complete: boolean;
+  active: boolean;
+  detail: string;
+}
+
 export function runtimeStepRows(state: LoopRuntimeState): RuntimeStepRow[] {
   const hasConfig = state.startedAt !== null && state.goal !== null;
   const hasContext = state.targetContext !== null;
@@ -18,8 +26,12 @@ export function runtimeStepRows(state: LoopRuntimeState): RuntimeStepRow[] {
   const currentTurnScored = last !== undefined && (last.globalTurn ?? last.turn) >= state.totalTurnsStarted;
   const hasScore = state.results.length > 0;
   const done = !state.active && hasConfig;
+  const agentWorkComplete = currentTurnScored || done || (hasTurn && state.currentTurnStartedAt === null);
+  const agentWorkActive = state.active && hasTurn && !agentWorkComplete;
+  const measureProgressActive = state.active && hasTurn && !currentTurnScored && agentWorkComplete;
+  const resumeOrStopActive = state.active && currentTurnScored && hasScore;
 
-  return [
+  return finalizeRuntimeRows([
     row(1, "parse config", hasConfig, state.active, configDetail(state)),
     row(2, "capture context", hasContext, state.active && !hasTurn, contextDetail(state)),
     row(3, "persist log", hasConfig, state.active, ".loop/log.jsonl config entry"),
@@ -27,12 +39,12 @@ export function runtimeStepRows(state: LoopRuntimeState): RuntimeStepRow[] {
     row(5, "kickoff prompt", hasConfig, state.active && !hasTurn, "analysis, files, acceptance criteria, verification"),
     row(6, "inject guardrails", hasTurn, state.active && hasTurn, "goal, limits, hard rules, required evidence"),
     row(7, "start turn", hasTurn, state.active && hasTurn, `turn ${state.turnsStarted}/${state.maxTurns}, total ${state.totalTurnsStarted}`),
-    row(8, "agent work", currentTurnScored || done, state.active && hasTurn && !currentTurnScored, currentTurnScored ? "scored" : "work in progress"),
-    row(9, "measure progress", currentTurnScored, state.active && hasTurn && !currentTurnScored, currentTurnScored && last ? progressDetail(last) : "waiting for score_loop_result"),
+    row(8, "agent work", agentWorkComplete, agentWorkActive, currentTurnScored ? "scored" : measureProgressActive ? "ready for score_loop_result" : agentWorkComplete ? "work ended" : "work in progress"),
+    row(9, "measure progress", currentTurnScored, measureProgressActive, currentTurnScored && last ? progressDetail(last) : "waiting for score_loop_result"),
     row(10, "feedback", hasScore, state.active && hasScore, feedbackDetail(state)),
-    row(11, "resume or stop", done, state.active && hasScore, state.stopReason ?? "baseline, improvement, budget, and blocker check"),
+    row(11, "resume or stop", done, resumeOrStopActive, state.stopReason ?? "feedback, budget, and stop-limit check"),
     row(12, "reconstruct", hasConfig, false, "state can resume from the log"),
-  ];
+  ], state.active);
 }
 
 export function formatRuntimeSteps(state: LoopRuntimeState): string {
@@ -51,12 +63,30 @@ export function renderRuntimeStepTable(state: LoopRuntimeState, width: number, t
   return lines;
 }
 
+export function runtimeStepHistoryRows(state: LoopRuntimeState, previousRows = 5, nextRows = 4): RuntimeStepRow[] {
+  const rows = runtimeStepRows(state);
+  const currentIndex = currentRuntimeStepIndex(rows);
+  const start = Math.max(0, currentIndex - previousRows);
+  const end = Math.min(rows.length, currentIndex + nextRows + 1);
+  const window = rows.slice(start, end);
+  if (window.length <= previousRows + nextRows + 1) return window;
+  return window.slice(window.length - (previousRows + nextRows + 1));
+}
+
 function visibleRuntimeRows(rows: RuntimeStepRow[], maxRows: number): RuntimeStepRow[] {
   if (rows.length <= maxRows) return rows;
   const activeIndex = rows.findIndex((step) => step.status === "active" || step.status === "waiting");
   const center = activeIndex === -1 ? rows.length - 1 : activeIndex;
   const start = Math.max(0, Math.min(center - Math.floor(maxRows / 2), rows.length - maxRows));
   return rows.slice(start, start + maxRows);
+}
+
+function currentRuntimeStepIndex(rows: RuntimeStepRow[]): number {
+  const activeIndex = rows.findIndex((step) => step.status === "active");
+  if (activeIndex !== -1) return activeIndex;
+  const waitingIndex = rows.findIndex((step) => step.status === "waiting");
+  if (waitingIndex !== -1) return waitingIndex;
+  return Math.max(0, rows.length - 1);
 }
 
 function renderStep(step: RuntimeStepRow, width: number, theme: Theme): string {
@@ -74,9 +104,23 @@ function header(width: number, theme: Theme): string {
   return width < 60 ? truncateToWidth(`  ${theme.fg("muted", label)}`, width, "…", true) : truncateToWidth(line, width, "…", true);
 }
 
-function row(index: number, label: string, complete: boolean, active: boolean, detail: string): RuntimeStepRow {
-  const status = complete ? "done" : active ? "active" : "waiting";
-  return { index, label, status, detail };
+function row(index: number, label: string, complete: boolean, active: boolean, detail: string): RuntimeStepDraft {
+  return { index, label, complete, active, detail };
+}
+
+function finalizeRuntimeRows(rows: RuntimeStepDraft[], activeLoop: boolean): RuntimeStepRow[] {
+  if (!activeLoop) return rows.map((step) => ({ index: step.index, label: step.label, detail: step.detail, status: step.complete ? "done" : "waiting" }));
+
+  const activeIndex = rows.findIndex((step) => step.active && !step.complete);
+  const firstIncompleteIndex = rows.findIndex((step) => !step.complete);
+  const currentIndex = activeIndex !== -1 ? activeIndex : firstIncompleteIndex === -1 ? rows.length - 1 : firstIncompleteIndex;
+
+  return rows.map((step, index) => {
+    if (index > currentIndex) return { index: step.index, label: step.label, detail: step.detail, status: "waiting" };
+    if (index < currentIndex) return { index: step.index, label: step.label, detail: step.detail, status: step.complete ? "done" : "waiting" };
+    const status = step.active && !step.complete ? "active" : step.complete ? "done" : "waiting";
+    return { index: step.index, label: step.label, detail: step.detail, status };
+  });
 }
 
 function configDetail(state: LoopRuntimeState): string {
@@ -98,7 +142,7 @@ function progressDetail(entry: LoopScoreEntry): string {
 function feedbackDetail(state: LoopRuntimeState): string {
   const last = state.results.at(-1);
   if (!last) return "waiting for first score";
-  if (last.passedDefinition) return "verified improvement accepted";
+  if (last.passedDefinition) return "new best recorded";
   return last.nextActions[0] ?? "next attempt required";
 }
 

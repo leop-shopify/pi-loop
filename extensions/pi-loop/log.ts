@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 
 import { ensureParentDir, loopLogPath } from "./paths.ts";
-import { createLoopState, deadlineReached, passedDefinition, turnLimitReached, type LoopConfigEntry, type LoopEventEntry, type LoopLogEntry, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
+import { createLoopState, deadlineReached, turnLimitReached, type LoopConfigEntry, type LoopEventEntry, type LoopLogEntry, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
 
 export function appendLogEntry(cwd: string, entry: LoopLogEntry): void {
   const filePath = loopLogPath(cwd);
@@ -32,7 +32,7 @@ export function reconstructLoopState(cwd: string, now: number = Date.now(), sess
   const state = createLoopState();
   for (const entry of readLogEntries(cwd)) applyLogEntry(state, entry, sessionId);
   const exhausted = state.currentRun >= state.maxRuns && turnLimitReached(state);
-  if (state.goal && !state.stopReason && !passedDefinition(state) && !deadlineReached(state, now) && !exhausted) state.active = true;
+  if (state.goal && !state.stopReason && !deadlineReached(state, now) && !exhausted) state.active = true;
   return state;
 }
 

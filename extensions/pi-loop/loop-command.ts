@@ -12,7 +12,7 @@ import { clearLoopWidget, updateLoopWidget } from "./ui.ts";
 
 export function registerLoopCommand(pi: ExtensionAPI, controller: LoopController): void {
   pi.registerCommand("loop", {
-    description: "Run a score-guided software engineering loop. Defaults: 1 hour, 20 turns.",
+    description: "Run a score-guided software engineering loop. Defaults: 120 minutes, 20 turns.",
     handler: async (args, ctx) => {
       const parsed = parseLoopArgs(args ?? "");
       const state = controller.getState(ctx);
@@ -75,5 +75,10 @@ function clearLoop(state: Parameters<typeof stopLoop>[0]): void {
   state.runs = [];
   state.sessionId = null;
   state.targetContext = null;
+  state.currentPrompt = null;
+  state.currentTurnStartedAt = null;
+  state.lastTurnDurationMs = null;
+  state.turnDurations = [];
+  state.contextUsage = null;
   state.stopReason = "cleared by user";
 }

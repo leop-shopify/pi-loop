@@ -18,5 +18,15 @@ export function progressBarPercent(value: number | null): number {
 export function bestProgressEntry(state: LoopRuntimeState): LoopScoreEntry | null {
   return [...state.results]
     .filter((entry) => typeof entry.progressPercent === "number")
-    .sort((a, b) => (b.progressPercent ?? Number.NEGATIVE_INFINITY) - (a.progressPercent ?? Number.NEGATIVE_INFINITY))[0] ?? null;
+    .sort(compareProgressEntries)[0] ?? null;
+}
+
+function compareProgressEntries(a: LoopScoreEntry, b: LoopScoreEntry): number {
+  const progressDiff = (b.progressPercent ?? Number.NEGATIVE_INFINITY) - (a.progressPercent ?? Number.NEGATIVE_INFINITY);
+  if (progressDiff !== 0) return progressDiff;
+  const scoreDiff = b.score - a.score;
+  if (scoreDiff !== 0) return scoreDiff;
+  const turnDiff = (b.globalTurn ?? b.turn) - (a.globalTurn ?? a.turn);
+  if (turnDiff !== 0) return turnDiff;
+  return b.timestamp - a.timestamp;
 }

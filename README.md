@@ -1,6 +1,6 @@
 # pi-loop
 
-`pi-loop` is a Pi extension for bounded, progress-guided software engineering loops. The first scored turn becomes the hidden baseline; later turns continue until they show positive percent improvement over that baseline with no blockers, or until configured safety limits stop the loop.
+`pi-loop` is a Pi extension for bounded, progress-guided software engineering loops. The first scored turn becomes the hidden baseline; later turns use scoring as feedback and keep exploring until configured safety limits or the user stops the loop.
 
 It is meant for quality work where “looks done” is not enough: test improvement, refactors, Rails hardening, verification cleanup, review-gate fixes, and similar engineering tasks.
 
@@ -21,8 +21,8 @@ The extension adds:
 | Surface | Name | Purpose |
 | --- | --- | --- |
 | Command | `/loop` | Starts, stops, clears, and reports loop status. |
-| Tool | `score_loop_result` | Records concrete engineering evidence and reports progress over the first-loop baseline. |
-| UI | below-editor widget | Shows runtime steps, turn count, baseline/progress state, blockers, and next action. |
+| Tool | `score_loop_result` | Records concrete engineering evidence and reports feedback; progress is an observation, not a stop command. |
+| UI | floating right-side panel | Shows runtime data, current prompt, timing, tokens, and bounded step history. |
 | State | `.loop/log.jsonl` | Persists loop config, internal measurements, progress entries, and stop events in the current working directory. Active loops are bound to the Pi session that started them. |
 
 ## Install
@@ -65,7 +65,7 @@ Defaults:
 
 | Setting | Default |
 | --- | --- |
-| Timebox | 60 minutes |
+| Timebox | 120 minutes |
 | Turn limit | 20 turns |
 | Run count | 1 |
 
@@ -82,9 +82,9 @@ Defaults:
 | Schedule proposition | The LLM proposes transformations in a structured format. | `score_loop_result` requires `attempt.rationale` and `attempt.fullPlan` evidence for production changes, giving pi-loop a visible plan/attempt analogue without restricting all Pi tools. |
 | Response parser | Extracts the schedule from the LLM response. | TypeBox validates the `score_loop_result` input schema, including enum-safe attempt, check, artifact, risk, and review-gate evidence. |
 | Validity and legality checks | Lightweight syntax checks plus compiler legality checks. | Strict schema validation, independent evidence verification, and scoring hard caps flag or cap weak evidence and unresolved risks; pi-loop still does not formally prove arbitrary code safety. |
-| Compiler/runtime feedback | Reports invalid, illegal, solver failure, crash, or successful speedup/slowdown. | Reports typed outcome plus progress/evidence feedback: baseline recorded or percent improvement over baseline, verifier findings, blockers, strengths, and next actions. |
-| Optimization history | Feedback is appended to the dialogue so the next iteration can adapt. | Progress entries are appended to `.loop/log.jsonl`; continuation prompts include baseline/progress state, blockers, next actions, and budget. |
-| Stopping condition | Stop command or iteration limit. | Positive percent improvement over the first scored turn with no blockers, timebox, turn limit, user stop, or repeated missing scorer calls. |
+| Compiler/runtime feedback | Reports invalid, illegal, solver failure, crash, or successful speedup/slowdown. | Reports typed outcome plus progress/evidence feedback: baseline recorded, new-best progress, verifier findings, blockers, strengths, and next actions. |
+| Optimization history | Feedback is appended to the dialogue so the next iteration can adapt. | Progress entries are appended to `.loop/log.jsonl`; continuation prompts are rebuilt as refined prompts with what was tried, what did not improve, plateau/repeat signals, best attempt to beat, blockers, next actions, and budget. |
+| Stopping condition | Stop command or iteration limit; the framework can push past premature LLM stop attempts. | Timebox, turn limit, run limit, user stop, or repeated missing scorer calls. Positive heuristic progress alone never stops the loop. |
 
 ## Runtime context steps
 
@@ -100,8 +100,8 @@ Defaults:
 10. The score tool verifies evidence, classifies the outcome, appends a progress entry to `.loop/log.jsonl`, updates the widget, and returns progress feedback. The first call records only the baseline.
 11. On `agent_end`, pi-loop checks whether the turn produced a score:
     - if not, it schedules a missing-score prompt
-    - if this was the baseline or no positive progress was verified, it schedules a continuation prompt using blockers, next actions, and remaining budget
-    - if positive progress over baseline is verified with no blockers, or a safety limit is hit, it appends a stop event, sends a concise TL;DR summary with each loop step taken, disables the score tool, and clears the widget/status UI
+    - it schedules a refined continuation prompt using tried actions, non-improvements, plateau/repeat analysis, blockers, next actions, and remaining budget
+    - if a safety limit is hit, it appends a stop event, sends a concise TL;DR summary with each loop step taken, disables the score tool, and clears the widget/status UI
 12. On the next event in the same Pi session, pi-loop reconstructs active state from `.loop/log.jsonl` and resumes the widget/tool state when limits have not been reached. A different Pi session ignores that active loop and must start its own `/loop`.
 
 ## Input structure
@@ -111,7 +111,7 @@ There are two inputs: the command input and the scoring input.
 ### `/loop` command input
 
 ```text
-/loop <goal> [--minutes=60] [--turns=20] [--runs=1]
+/loop <goal> [--minutes=120] [--turns=20] [--runs=1]
 /loop <goal> [--file=path] [--symbol=Name] [--check="pnpm test tests/foo.test.mjs"]
 ```
 
@@ -173,7 +173,7 @@ Important nested evidence:
 Text response shape:
 
 ```text
-Progress: <baseline recorded|+N.N% over baseline> (<baseline recorded; continue|continue|verified improvement accepted>)
+Progress: <baseline recorded|+N.N% over baseline> (<baseline recorded; continue|new best recorded; continue|continue>)
 Outcome: <typed outcome>
 Blockers:
 - <severity>: <message>
@@ -183,7 +183,7 @@ Next actions:
 - <action>
 ```
 
-Structured details keep internal measurement fields for persistence and automated checks; the UI and text response do not render those fields.
+Structured details keep internal measurement fields for persistence and automated checks; the UI and text response do not render those fields. `passedDefinition` is retained as a compatibility field for new-best feedback and is not a loop stop command.
 
 ```ts
 {
@@ -228,24 +228,28 @@ Structured details keep internal measurement fields for persistence and automate
 
 ### UI output
 
-The below-editor widget renders the runtime flow and the recent progress table so the README model is visible while the loop runs:
+The floating right-side panel renders at 20% terminal width and 90% terminal height. It shows runtime data, the current prompt, and bounded step history so the README model is visible while the loop runs:
 
 ```text
-─── pi-loop <status> ─────────────────────────
-Progress: <baseline recorded|+N.N% over baseline>  best <+N.N% over baseline run n>
-Budget: time <elapsed>/<limit>m  run <current>/<max>  turn <current>/<max>  total <n>
-Goal: <goal>
-  #   status   step              detail
-  01  done     parse config      <turns> turns, <minutes>m, <runs> run(s)
-  02  done     capture context   <package-manager>, git <branch>, <check-count> checks
-  ...
-  #   run  progress     state     detail
-  1   1    baseline     baseline  next: Baseline recorded; run another loop turn...
-  2   1    +6.2%       accepted  next: <action>
-Next: <next action>
+╭──────────── pi-loop <status> ────────────╮
+│──────────── data ────────────            │
+│turn: <total>/<limit> total, run <n>/<max> │
+│time: <elapsed>/<limit>m all, current <n> │
+│last turn: <duration|none>                │
+│tokens: <used>/<window> <percent>         │
+│progress: <baseline|+N.N% over baseline>  │
+│best: <+N.N% over baseline run n|none>    │
+│──────── current prompt ────────          │
+│> Continue the pi-loop workflow...        │
+│──────── step history ────────            │
+│  07 done  start turn - turn <n>/<max>    │
+│> 08 now   agent work - work in progress  │
+│. 09 next  measure progress - waiting...  │
+│. 10 next  feedback - waiting...          │
+╰──────────────────────────────────────────╯
 ```
 
-The runtime step table is the live version of the “Runtime context steps” section: `/loop status` prints all 12 steps, and the widget shows the currently relevant window so the interface stays readable in narrow terminals. If there is a blocker, the final line highlights the top blocker instead of the next action. When the loop finishes, pi-loop clears the widget/status UI and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
+The runtime step table is the live version of the “Runtime context steps” section: `/loop status` prints all 12 steps, and the panel shows the currently relevant window so the interface stays readable in narrow terminals. `done` is only for completed past steps; future steps render as `next`/waiting until the active step advances. When the loop finishes, pi-loop clears the widget/status UI and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
 
 ### Sequential best-of-K runs
 
@@ -254,14 +258,14 @@ The runtime step table is the live version of the “Runtime context steps” se
 Behavior:
 
 1. Run 1 starts with the normalized target context.
-2. If a run reaches its turn limit without accepted improvement, pi-loop appends `run_stopped`, starts the next run, and asks for a genuinely different plan.
-3. If any run verifies positive progress over the baseline with no blockers, all remaining runs stop.
+2. If a run reaches its turn limit, pi-loop appends `run_stopped`, starts the next run, and asks for a genuinely different plan.
+3. Scoring improvements are retained as best-so-far feedback but do not stop remaining runs.
 4. If all runs exhaust, the stop reason reports the best progress and run.
 5. `/loop off` stops all runs.
 
 ### Premature-stop handling
 
-If a turn ends without `score_loop_result`, pi-loop appends a `missing_score` event and asks the agent to record evidence before doing more work. If the agent appears to claim completion before verified improvement, pi-loop appends `premature_stop` and treats the completion claim as rejected.
+If a turn ends without `score_loop_result`, pi-loop appends a `missing_score` event and asks the agent to record evidence before doing more work. If the agent appears to claim completion before a configured stop point, pi-loop appends `premature_stop` and treats the completion claim as rejected, even if the latest score is a new best.
 
 ## Initial example
 
@@ -382,11 +386,11 @@ Outcome: needs_iteration
 Blockers:
 - important: Non-trivial executable change has no automated review gate evidence.
 Next actions:
-- Baseline recorded; run another loop turn and verify percent improvement before stopping.
+- Baseline recorded; run another loop turn and use feedback to explore a better attempt.
 - Automated review gates: No security or dependency review gate evidence was provided.
 ```
 
-The next turn starts from that feedback. The agent might run full CI-equivalent checks, add missing edge coverage, or resolve a blocker. The extension stops only after a later turn verifies positive percent improvement over the first-loop baseline and has no blocker-severity findings.
+The next turn starts from that feedback. The agent might run full CI-equivalent checks, add missing edge coverage, or resolve a blocker. The extension does not stop on heuristic satisfaction; it keeps exploring until the configured limits or a user stop.
 
 ## Internal measurement model
 
@@ -528,14 +532,13 @@ PHASE 2: ITERATIVE OPTIMIZATION LOOP
   | progress entry             | visible feedback
   v                            v
 +-----------------------+    +--------------------------+
-| .loop/log.jsonl       |    | Below-editor widget      |
-| append progress/outcome|   | progress / turns / blocker|
+| .loop/log.jsonl       |    | Floating side panel     |
+| append progress/outcome|   | data / prompt / history |
 +-----------------------+    +--------------------------+
   |
   v
 +--------------------------------------------------+
 | Stop check                                       |
-| - positive progress over baseline, no blockers   |
 | - timebox reached                                |
 | - current run turn limit reached                 |
 | - all runs exhausted                             |
@@ -612,7 +615,7 @@ extensions/pi-loop/score-tool.ts             score_loop_result registration
 extensions/pi-loop/tool-schema.ts            strict tool input schema
 extensions/pi-loop/state.ts                  runtime state transitions
 extensions/pi-loop/log.ts                    .loop/log.jsonl persistence
-extensions/pi-loop/ui.ts                     below-editor progress widget
+extensions/pi-loop/ui.ts                     floating right-side progress panel
 extensions/pi-loop/scoring-heuristics.ts     public scoring facade
 extensions/pi-loop/scoring/evidence-verifier.ts independent evidence checks
 extensions/pi-loop/scoring/outcome.ts        typed paper-style feedback outcomes

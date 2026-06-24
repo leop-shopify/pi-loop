@@ -1,4 +1,4 @@
-export const DEFAULT_MINUTES = 60;
+export const DEFAULT_MINUTES = 120;
 export const DEFAULT_TURNS = 20;
 export const DEFAULT_TARGET = 90;
 export const DEFAULT_RUNS = 1;

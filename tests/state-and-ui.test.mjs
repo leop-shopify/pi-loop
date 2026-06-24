@@ -6,8 +6,10 @@ import { test } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { statusText } from "../extensions/pi-loop/commands.ts";
+import { floatingPanelOverlayOptions } from "../extensions/pi-loop/floating-panel.ts";
 import { scoreLoopResult } from "../extensions/pi-loop/scoring-heuristics.ts";
 import { appendLogEntry, reconstructLoopState } from "../extensions/pi-loop/log.ts";
+import { runtimeStepRows } from "../extensions/pi-loop/runtime-steps.ts";
 import {
   createLoopState,
   deadlineReached,
@@ -15,7 +17,7 @@ import {
   startLoopState,
   turnLimitReached,
 } from "../extensions/pi-loop/state.ts";
-import { improvementText, progressPercent, renderLoopWidget } from "../extensions/pi-loop/ui.ts";
+import { improvementText, progressPercent, renderLoopWidget, updateLoopWidget } from "../extensions/pi-loop/ui.ts";
 
 function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "pi-loop-test-"));
@@ -149,30 +151,40 @@ test("progress and improvement helpers format score state", () => {
   assert.equal(improvementText(-3), "-3");
 });
 
-test("loop widget renders a bordered score dashboard with a recent-attempt table", () => {
+test("loop widget renders a passive side-panel dashboard with data, prompt, and step history", () => {
   const state = createLoopState();
   startLoopState(state, {
     goal: "improve the dynamic loop interface",
     targetScore: 90,
     maxTurns: 20,
-    maxMinutes: 60,
+    maxMinutes: 120,
     startedAt: Date.now() - 123_000,
   });
+  state.currentPrompt = "Continue the pi-loop workflow. Goal: improve the dynamic loop interface. Use real verification and call score_loop_result.";
+  state.contextUsage = { tokens: 12_345, contextWindow: 200_000, percent: 6.17 };
+  state.turnDurations = [
+    { run: 1, turn: 1, globalTurn: 1, startedAt: 1, endedAt: 2, durationMs: 4_000 },
+    { run: 1, turn: 2, globalTurn: 2, startedAt: 3, endedAt: 4, durationMs: 7_000 },
+  ];
 
   for (let turn = 1; turn <= 7; turn++) {
     state.results.push(progressEntry(turn, turn === 1 ? null : turn * 2.5));
   }
 
-  const lines = renderLoopWidget(state, 120, plainTheme);
+  const lines = renderLoopWidget(state, 52, plainTheme);
   const text = lines.join("\n");
 
   assert.match(lines[0], /pi-loop running/);
-  assert.match(text, /Progress:/);
-  assert.match(text, /Budget:/);
-  assert.match(text, /#\s+run\s+progress\s+state\s+detail/);
-  assert.match(text, /\+17\.5%/);
-  assert.match(text, /… 1 earlier attempt/);
-  assert.match(text, /continue|baseline|accepted|blocked/);
+  assert.match(text, /data/);
+  assert.match(text, /current prompt/);
+  assert.match(text, /step history/);
+  assert.match(text, /turn:/);
+  assert.match(text, /time:/);
+  assert.match(text, /tokens:/);
+  assert.match(text, /progress:/);
+  assert.match(text, /recent:/);
+  assert.match(text, /Continue the pi-loop workflow/);
+  assert.equal(lines.every((line) => visibleWidth(line) <= 52), true);
 });
 
 test("loop status reports the README runtime steps", () => {
@@ -192,28 +204,171 @@ test("loop status reports the README runtime steps", () => {
   assert.match(text, /Runtime steps:/);
   assert.match(text, /01\. done\s+parse config/);
   assert.match(text, /09\. active\s+measure progress/);
-  assert.match(text, /12\. done\s+reconstruct/);
+  assert.match(text, /12\. waiting\s+reconstruct/);
 });
 
-test("loop widget adapts the table for narrow widths", () => {
+test("runtime steps never mark future steps done while a loop is active", () => {
   const state = createLoopState();
   startLoopState(state, {
-    goal: "make the loop table responsive at small terminal widths",
+    goal: "keep future steps honest",
     targetScore: 90,
     maxTurns: 20,
-    maxMinutes: 60,
+    maxMinutes: 120,
+    startedAt: Date.now(),
+  });
+  state.totalTurnsStarted = 1;
+  state.turnsStarted = 1;
+
+  const rows = runtimeStepRows(state);
+  const activeIndex = rows.findIndex((step) => step.status === "active");
+
+  assert.ok(activeIndex >= 0);
+  assert.equal(rows.slice(activeIndex + 1).some((step) => step.status === "done"), false);
+});
+
+test("runtime steps expose only one active step and defer measure progress until agent work ends", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "fix active step display",
+    targetScore: 90,
+    maxTurns: 20,
+    maxMinutes: 120,
+    startedAt: Date.now(),
+  });
+  state.totalTurnsStarted = 1;
+  state.turnsStarted = 1;
+  state.currentTurnStartedAt = Date.now();
+
+  const duringWork = runtimeStepRows(state);
+  const duringWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
+  assert.deepEqual(duringWork.filter((step) => step.status === "active").map((step) => step.label), ["agent work"]);
+  assert.equal(duringWork.find((step) => step.label === "measure progress").status, "waiting");
+  assert.equal(duringWorkCurrentLines.length, 1);
+  assert.match(duringWorkCurrentLines[0], /agent work/);
+
+  state.currentTurnStartedAt = null;
+  const afterWork = runtimeStepRows(state);
+  const afterWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
+  assert.deepEqual(afterWork.filter((step) => step.status === "active").map((step) => step.label), ["measure progress"]);
+  assert.equal(afterWorkCurrentLines.length, 1);
+  assert.match(afterWorkCurrentLines[0], /measure progress/);
+});
+
+test("prior scores do not make resume-or-stop active during later agent work", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "keep one active runtime step after the baseline",
+    targetScore: 90,
+    maxTurns: 20,
+    maxMinutes: 120,
     startedAt: Date.now(),
   });
   state.results.push(progressEntry(1, null));
+  state.totalTurnsStarted = 2;
+  state.turnsStarted = 2;
+  state.currentTurnStartedAt = Date.now();
 
-  const wide = renderLoopWidget(state, 120, plainTheme).join("\n");
-  const narrowLines = renderLoopWidget(state, 58, plainTheme);
-  const narrow = narrowLines.join("\n");
+  const duringWork = runtimeStepRows(state);
+  const duringWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
+  assert.deepEqual(duringWork.filter((step) => step.status === "active").map((step) => step.label), ["agent work"]);
+  assert.equal(duringWork.find((step) => step.label === "measure progress").status, "waiting");
+  assert.equal(duringWork.find((step) => step.label === "resume or stop").status, "waiting");
+  assert.equal(duringWorkCurrentLines.length, 1);
+  assert.match(duringWorkCurrentLines[0], /agent work/);
 
-  assert.match(wide, /#\s+run\s+progress\s+state\s+detail/);
-  assert.doesNotMatch(narrow, /corr\s+test|score\s+delta/);
-  assert.match(narrow, /#\s+run\s+prog\s+state\s+detail/);
-  assert.equal(narrowLines.every((line) => visibleWidth(line) <= 58), true);
+  state.currentTurnStartedAt = null;
+  const afterWork = runtimeStepRows(state);
+  const afterWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
+  assert.deepEqual(afterWork.filter((step) => step.status === "active").map((step) => step.label), ["measure progress"]);
+  assert.equal(afterWork.find((step) => step.label === "resume or stop").status, "waiting");
+  assert.equal(afterWorkCurrentLines.length, 1);
+  assert.match(afterWorkCurrentLines[0], /measure progress/);
+});
+
+test("loop widget keeps step history to last five, current, and next four", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "make the side panel responsive at small terminal widths",
+    targetScore: 90,
+    maxTurns: 20,
+    maxMinutes: 120,
+    startedAt: Date.now(),
+  });
+  state.totalTurnsStarted = 1;
+  state.turnsStarted = 1;
+  state.results.push(progressEntry(1, null));
+
+  const narrowLines = renderLoopWidget(state, 40, plainTheme);
+  const historyLines = narrowLines.filter((line) => /\b(done|now|next)\b/.test(line));
+
+  assert.equal(historyLines.length <= 10, true);
+  assert.match(narrowLines.join("\n"), /> 11 now/);
+  assert.equal(narrowLines.every((line) => visibleWidth(line) <= 40), true);
+});
+
+test("loop panel overlay uses Pi's non-capturing right-side overlay", () => {
+  const options = floatingPanelOverlayOptions();
+
+  assert.equal(options.anchor, "right-center");
+  assert.equal(options.width, "20%");
+  assert.equal(options.minWidth, 36);
+  assert.equal(options.maxHeight, "90%");
+  assert.equal(options.nonCapturing, true);
+});
+
+test("loop widget can render to the requested panel height", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "fill the loop panel vertically",
+    targetScore: 90,
+    maxTurns: 20,
+    maxMinutes: 120,
+    startedAt: Date.now(),
+  });
+
+  const lines = renderLoopWidget(state, 50, plainTheme, 30);
+
+  assert.equal(lines.length, 30);
+  assert.match(lines.at(-1), /╯/);
+  assert.equal(lines.every((line) => visibleWidth(line) <= 50), true);
+});
+
+test("updateLoopWidget clears the old bottom widget and opens the floating panel", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "float the UI",
+    targetScore: 90,
+    maxTurns: 20,
+    maxMinutes: 120,
+    startedAt: Date.now(),
+  });
+
+  const calls = [];
+  let renderedLines = [];
+  const ctx = {
+    hasUI: true,
+    sessionManager: { getSessionId: () => `overlay-test-${Date.now()}` },
+    getContextUsage: () => ({ tokens: 1_000, contextWindow: 100_000, percent: 1 }),
+    ui: {
+      theme: plainTheme,
+      setWidget(name, widget) { calls.push({ type: "widget", name, widget }); },
+      setStatus(name, status) { calls.push({ type: "status", name, status }); },
+      custom(factory, options) {
+        calls.push({ type: "custom", options });
+        const component = factory({ terminal: { rows: 40 }, requestRender() {} }, plainTheme, {}, () => {});
+        renderedLines = component.render(48);
+        return Promise.resolve();
+      },
+    },
+  };
+
+  updateLoopWidget(ctx, state);
+
+  assert.equal(calls.some((call) => call.type === "widget" && call.name === "pi-loop" && call.widget === undefined), true);
+  const customCall = calls.find((call) => call.type === "custom");
+  assert.equal(customCall.options.overlay, true);
+  assert.equal(customCall.options.overlayOptions().nonCapturing, true);
+  assert.equal(renderedLines.length, 36);
 });
 
 function progressEntry(turn, progressPercent) {

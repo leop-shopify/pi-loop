@@ -16,11 +16,11 @@ test("assistant text extraction reads assistant messages only", () => {
   assert.equal(text, "All set");
 });
 
-test("premature-stop prompt rejects completion claims before verified improvement", () => {
+test("premature-stop prompt rejects completion claims before configured stop", () => {
   const prompt = prematureStopPrompt({ results: [{ score: 72, targetScore: 90 }] });
 
   assert.match(prompt, /claimed completion/);
   assert.match(prompt, /baseline recorded/);
-  assert.match(prompt, /verified improvement/);
+  assert.match(prompt, /Scoring is feedback, not acceptance/);
   assert.match(prompt, /rejected/);
 });

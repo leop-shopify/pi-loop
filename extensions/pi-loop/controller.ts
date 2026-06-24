@@ -6,7 +6,7 @@ import { appendLogEntry } from "./log.ts";
 import type { RuntimeStore } from "./runtime-store.ts";
 import { bestScoreReason } from "./run-manager.ts";
 import { clearLoopWidget, updateLoopWidget } from "./ui.ts";
-import { deadlineReached, passedDefinition, stopLoop, turnLimitReached, type LoopRuntimeState } from "./state.ts";
+import { deadlineReached, stopLoop, turnLimitReached, type LoopRuntimeState } from "./state.ts";
 
 export interface LoopController {
   scoreToolName: string;
@@ -61,11 +61,16 @@ export function createLoopController(pi: ExtensionAPI, store: RuntimeStore, scor
     },
     finishLoop,
     sendWhenReady(message: string, ctx: ExtensionContext): void {
+      const state = getState(ctx);
+      state.currentPrompt = message;
+      updateLoopWidget(ctx, state);
       if (ctx.isIdle()) pi.sendUserMessage(message);
       else pi.sendUserMessage(message, { deliverAs: "followUp" });
     },
     scheduleResume(ctx: ExtensionContext, state: LoopRuntimeState, message: string): void {
       cancelPendingResume(state);
+      state.currentPrompt = message;
+      updateLoopWidget(ctx, state);
       state.pendingResumeTimer = setTimeout(() => {
         state.pendingResumeTimer = null;
         if (!state.active) return;
@@ -74,10 +79,6 @@ export function createLoopController(pi: ExtensionAPI, store: RuntimeStore, scor
       }, RESUME_DELAY_MS);
     },
     enforceLimits(ctx: ExtensionContext, state: LoopRuntimeState): boolean {
-      if (passedDefinition(state)) {
-        finishLoop(ctx, state, "verified improvement accepted");
-        return true;
-      }
       if (deadlineReached(state)) {
         finishLoop(ctx, state, "time limit reached");
         return true;

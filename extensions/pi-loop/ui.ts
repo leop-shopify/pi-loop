@@ -1,10 +1,12 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 
+import { hideFloatingPanel, showFloatingPanel } from "./floating-panel.ts";
 import { bestProgressEntry, formatProgressPercent, progressBarPercent } from "./progress.ts";
-import { renderRuntimeStepTable } from "./runtime-steps.ts";
+import { runtimeStepHistoryRows, type RuntimeStepRow } from "./runtime-steps.ts";
 import { elapsedMs, lastScore, type LoopRuntimeState } from "./state.ts";
-import { renderScoreTable } from "./ui-table.ts";
+
+const PANEL_KEY = "pi-loop";
 
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -30,81 +32,109 @@ export function improvementText(value: number | null): string {
 export function updateLoopWidget(ctx: ExtensionContext, state: LoopRuntimeState): void {
   if (!ctx.hasUI) return;
 
+  ctx.ui.setWidget(PANEL_KEY, undefined);
+
   if (!state.active && state.results.length === 0) {
-    ctx.ui.setWidget("pi-loop", undefined);
-    ctx.ui.setStatus("pi-loop", undefined);
+    hideFloatingPanel(ctx, PANEL_KEY);
+    ctx.ui.setStatus(PANEL_KEY, undefined);
     return;
   }
 
-  ctx.ui.setWidget("pi-loop", (_tui, theme) => ({
-    render(width: number): string[] {
-      return renderLoopWidget(state, Math.max(1, width), theme);
-    },
-    invalidate(): void {},
-  }), { placement: "belowEditor" });
+  captureContextUsage(ctx, state);
+  showFloatingPanel(ctx, PANEL_KEY, state, renderLoopWidget);
 
   const last = lastScore(state);
   const best = bestProgressEntry(state);
   const status = state.active ? "running" : state.stopReason ?? "stopped";
-  ctx.ui.setStatus("pi-loop", ctx.ui.theme.fg("dim", `loop ${status}${last ? ` progress ${formatProgressPercent(last.progressPercent ?? null)}` : ""}${best ? ` best ${formatProgressPercent(best.progressPercent ?? null)}` : ""}`));
+  ctx.ui.setStatus(PANEL_KEY, ctx.ui.theme.fg("dim", `loop ${status}${last ? ` progress ${formatProgressPercent(last.progressPercent ?? null)}` : ""}${best ? ` best ${formatProgressPercent(best.progressPercent ?? null)}` : ""}`));
 }
 
 export function clearLoopWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
-  ctx.ui.setWidget("pi-loop", undefined);
-  ctx.ui.setStatus("pi-loop", undefined);
+  hideFloatingPanel(ctx, PANEL_KEY);
+  ctx.ui.setWidget(PANEL_KEY, undefined);
+  ctx.ui.setStatus(PANEL_KEY, undefined);
 }
 
-export function renderLoopWidget(state: LoopRuntimeState, width: number, theme: Theme): string[] {
+export function renderLoopWidget(state: LoopRuntimeState, width: number, theme: Theme, height?: number): string[] {
   const safeWidth = Math.max(1, width);
+  const status = state.active ? "running" : state.stopReason ?? "stopped";
+  const contentWidth = Math.max(1, safeWidth - 4);
+  const content = fitContentHeight([
+    ...section("data", dataLines(state, contentWidth, theme), contentWidth, theme),
+    ...section("current prompt", promptLines(state, contentWidth, theme), contentWidth, theme),
+    ...section("step history", stepHistoryLines(state, contentWidth, theme), contentWidth, theme),
+  ], Math.max(0, (height ?? 0) - 2), contentWidth);
+
+  return bordered(`pi-loop ${status}`, content, safeWidth, theme);
+}
+
+function captureContextUsage(ctx: ExtensionContext, state: LoopRuntimeState): void {
+  const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
+  state.contextUsage = usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : state.contextUsage;
+}
+
+function dataLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
   const scoreEntry = lastScore(state);
   const best = bestProgressEntry(state);
-  const percent = progressBarPercent(scoreEntry?.progressPercent ?? null);
-  const elapsed = formatElapsed(elapsedMs(state));
-  const status = state.active ? "running" : state.stopReason ?? "stopped";
   const progressText = scoreEntry ? formatProgressPercent(scoreEntry.progressPercent ?? null) : "waiting for baseline";
   const bestText = best ? `${formatProgressPercent(best.progressPercent ?? null)} run ${best.run ?? 1}` : "none";
-  const bar = progressBar(percent, Math.max(8, Math.min(24, Math.floor(safeWidth / 4))), theme);
-  const goal = state.goal ? truncateToWidth(state.goal, Math.max(12, safeWidth - 8), "…", true) : "none";
+  const turnElapsed = state.currentTurnStartedAt === null ? null : Date.now() - state.currentTurnStartedAt;
+  const turnText = turnElapsed === null ? "idle" : formatElapsed(turnElapsed);
+  const lastTurnText = state.lastTurnDurationMs === null ? "none" : formatElapsed(state.lastTurnDurationMs);
+  const bar = progressBar(progressBarPercent(scoreEntry?.progressPercent ?? null), Math.max(6, Math.min(14, Math.floor(width / 3))), theme);
 
   return [
-    titleLine(`pi-loop ${status}`, safeWidth, theme),
-    joinToWidth([
-      theme.fg("muted", "Progress: "),
-      theme.fg(scoreEntry?.passedDefinition ? "success" : "warning", progressText),
-      theme.fg("dim", `  best ${bestText}`),
-      theme.fg("dim", `  ${bar}`),
-    ], safeWidth),
-    joinToWidth([
-      theme.fg("muted", "Budget: "),
-      theme.fg("dim", `time ${elapsed}/${state.maxMinutes}m`),
-      theme.fg("dim", `  run ${state.currentRun}/${state.maxRuns}`),
-      theme.fg("dim", `  turn ${state.turnsStarted}/${state.maxTurns}`),
-      theme.fg("dim", `  total ${state.totalTurnsStarted}`),
-    ], safeWidth),
-    truncateToWidth(`${theme.fg("muted", "Goal: ")}${theme.fg("dim", goal)}`, safeWidth, "…", true),
-    ...renderRuntimeStepTable(state, safeWidth, theme, safeWidth < 95 ? 5 : 7),
-    ...renderScoreTable(state, safeWidth, theme),
-    detailLine(state, scoreEntry, safeWidth, theme),
+    keyValueLine("turn", `${state.totalTurnsStarted}/${state.maxTurns * state.maxRuns} total, run ${state.currentRun}/${state.maxRuns}`, width, theme),
+    keyValueLine("time", `${formatElapsed(elapsedMs(state))}/${state.maxMinutes}m all, current ${turnText}`, width, theme),
+    keyValueLine("last turn", lastTurnText, width, theme),
+    keyValueLine("tokens", contextUsageText(state), width, theme),
+    keyValueLine("progress", `${progressText} ${bar}`, width, theme),
+    keyValueLine("best", bestText, width, theme),
+    ...recentTurnLines(state, width, theme),
   ];
 }
 
-function titleLine(title: string, width: number, theme: Theme): string {
-  const label = ` ${title} `;
-  const fill = Math.max(0, width - visibleWidth(label) - 3);
-  return truncateToWidth(`${theme.fg("dim", "───")}${theme.fg("accent", label)}${theme.fg("dim", "─".repeat(fill))}`, width, "…", true);
+function promptLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
+  const prompt = state.currentPrompt ?? state.goal ?? "Waiting for the next loop prompt.";
+  const lines = wrapPlainText(prompt, width, 5);
+  return lines.map((line, index) => {
+    const prefix = index === 0 ? theme.fg("muted", "> ") : theme.fg("dim", "  ");
+    return truncateToWidth(prefix + theme.fg(index === 0 ? "text" : "dim", line), width, "…", true);
+  });
 }
 
-function detailLine(state: LoopRuntimeState, scoreEntry: ReturnType<typeof lastScore>, width: number, theme: Theme): string {
-  const blockers = scoreEntry?.blockers?.filter((blocker) => blocker.severity === "blocker") ?? [];
-  const next = scoreEntry?.nextActions?.[0];
-  const premature = state.prematureStopCount > 0 ? `  premature stops ${state.prematureStopCount}` : "";
-  const detail = blockers.length > 0
-    ? theme.fg("error", `Top blocker: ${blockers[0].message}${premature}`)
-    : next
-      ? theme.fg("dim", `Next: ${next}${premature}`)
-      : theme.fg("dim", `score_loop_result required at the end of each loop turn${premature}`);
-  return truncateToWidth(detail, width, "…", true);
+function stepHistoryLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
+  return runtimeStepHistoryRows(state, 5, 4).slice(0, 10).map((step) => renderHistoryStep(step, width, theme));
+}
+
+function renderHistoryStep(step: RuntimeStepRow, width: number, theme: Theme): string {
+  const marker = step.status === "active" ? ">" : step.status === "done" ? " " : ".";
+  const status = step.status === "active" ? "now" : step.status === "done" ? "done" : "next";
+  const prefix = `${marker} ${String(step.index).padStart(2, "0")} ${pad(status, 5)} `;
+  const label = truncateToWidth(step.label, 16, "…", true);
+  const detailWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(label) - 3);
+  const color = step.status === "active" ? "warning" : step.status === "done" ? "success" : "dim";
+  return truncateToWidth(theme.fg(color, prefix) + theme.fg("muted", label) + theme.fg("dim", ` - ${truncateToWidth(step.detail, detailWidth, "…", true)}`), width, "…", true);
+}
+
+function recentTurnLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
+  if (state.turnDurations.length === 0) return [];
+  const recent = state.turnDurations.slice(-4).map((entry) => `#${entry.globalTurn} ${formatElapsed(entry.durationMs)}`).join(", ");
+  return [keyValueLine("recent", recent, width, theme)];
+}
+
+function contextUsageText(state: LoopRuntimeState): string {
+  const usage = state.contextUsage;
+  if (!usage) return "n/a";
+  const tokens = usage.tokens === null ? "unknown" : compactNumber(usage.tokens);
+  const percent = usage.percent === null ? "n/a" : `${Math.round(usage.percent)}%`;
+  return `${tokens}/${compactNumber(usage.contextWindow)} ${percent}`;
+}
+
+function keyValueLine(key: string, value: string, width: number, theme: Theme): string {
+  const label = `${key}: `;
+  return truncateToWidth(theme.fg("muted", label) + theme.fg("text", value), width, "…", true);
 }
 
 function progressBar(percent: number, width: number, theme: Theme): string {
@@ -113,16 +143,81 @@ function progressBar(percent: number, width: number, theme: Theme): string {
   return `${theme.fg("success", "█".repeat(filled))}${theme.fg("dim", "░".repeat(empty))}`;
 }
 
-function joinToWidth(parts: string[], width: number): string {
-  let line = "";
-  for (const part of parts) {
-    if (!part) continue;
-    const next = line + part;
+function fitContentHeight(lines: string[], targetHeight: number, width: number): string[] {
+  if (targetHeight <= 0) return lines;
+  const fitted = lines.slice(0, targetHeight);
+  while (fitted.length < targetHeight) fitted.push(" ".repeat(width));
+  return fitted;
+}
+
+function section(title: string, lines: string[], width: number, theme: Theme): string[] {
+  return [sectionTitle(title, width, theme), ...lines.map((line) => truncateToWidth(line, width, "…", true)), ""];
+}
+
+function sectionTitle(title: string, width: number, theme: Theme): string {
+  const label = ` ${title} `;
+  const fill = Math.max(0, width - visibleWidth(label));
+  return truncateToWidth(theme.fg("borderMuted", "─".repeat(Math.floor(fill / 2))) + theme.fg("accent", label) + theme.fg("borderMuted", "─".repeat(Math.ceil(fill / 2))), width, "…", true);
+}
+
+function bordered(title: string, lines: string[], width: number, theme: Theme): string[] {
+  if (width < 4) return lines.map((line) => truncateToWidth(line, width, "", true));
+  const inner = Math.max(1, width - 2);
+  const top = borderTitle(title, width, theme);
+  const body = lines.map((line) => contentLine(line, inner, theme));
+  const bottom = theme.fg("borderAccent", `╰${"─".repeat(inner)}╯`);
+  return [top, ...body, bottom].map((line) => truncateToWidth(line, width, "", true));
+}
+
+function borderTitle(title: string, width: number, theme: Theme): string {
+  const inner = Math.max(1, width - 2);
+  const label = truncateToWidth(` ${title} `, inner, "…", true);
+  const fill = Math.max(0, inner - visibleWidth(label));
+  return theme.fg("borderAccent", `╭${"─".repeat(Math.floor(fill / 2))}`) + theme.fg("accent", label) + theme.fg("borderAccent", `${"─".repeat(Math.ceil(fill / 2))}╮`);
+}
+
+function contentLine(line: string, inner: number, theme: Theme): string {
+  const text = pad(truncateToWidth(line, inner, "…", true), inner);
+  return theme.fg("border", "│") + text + theme.fg("border", "│");
+}
+
+function wrapPlainText(text: string, width: number, maxLines: number): string[] {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return ["n/a"];
+  const words = normalized.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
     if (visibleWidth(next) <= width) {
-      line = next;
+      current = next;
       continue;
     }
-    return truncateToWidth(line || part, width, "…", true);
+    if (current) lines.push(current);
+    current = word;
+    if (lines.length === maxLines) break;
   }
-  return truncateToWidth(line, width, "…", true);
+
+  if (lines.length < maxLines && current) lines.push(current);
+  if (lines.length === 0) lines.push(truncateToWidth(normalized, width, "…", true));
+
+  const consumed = lines.join(" ");
+  if (visibleWidth(consumed) < visibleWidth(normalized) && lines.length > 0) {
+    lines[lines.length - 1] = truncateToWidth(`${lines[lines.length - 1]} …`, width, "…", true);
+  }
+
+  return lines.slice(0, maxLines);
+}
+
+function compactNumber(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(value);
+}
+
+function pad(text: string, width: number): string {
+  const visible = visibleWidth(text);
+  if (visible >= width) return text;
+  return text + " ".repeat(width - visible);
 }

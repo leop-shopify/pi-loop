@@ -27,15 +27,19 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     controller.cancelPendingResume(state);
     state.turnsStarted++;
     state.totalTurnsStarted++;
+    state.currentTurnStartedAt = Date.now();
     state.lastAgentStartScoreCount = state.results.length;
     const run = state.runs.find((item) => item.index === state.currentRun);
     if (run) run.turnsStarted = state.turnsStarted;
+    captureContextUsage(ctx, state);
     updateLoopWidget(ctx, state);
   });
 
   pi.on("agent_end", async (event, ctx) => {
     const state = controller.getState(ctx);
     if (!state.active) return;
+    recordTurnDuration(state);
+    captureContextUsage(ctx, state);
     updateLoopWidget(ctx, state);
     if (controller.enforceLimits(ctx, state)) return;
 
@@ -63,9 +67,9 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     }
 
     const last = state.results[state.results.length - 1];
-    if (claimedCompletion && !last?.passedDefinition) {
+    if (claimedCompletion) {
       state.prematureStopCount++;
-      appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "premature_stop", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, score: last?.score, targetScore: last?.targetScore, reason: "completion claim before verified improvement" });
+      appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "premature_stop", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, score: last?.score, targetScore: last?.targetScore, reason: "completion claim before configured loop stop" });
       controller.scheduleResume(ctx, state, `${prematureStopPrompt(state)}\n\n${continuePrompt(state)}`);
       return;
     }
@@ -76,6 +80,33 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
   pi.on("before_agent_start", async (event, ctx) => {
     const state = controller.getState(ctx);
     if (!state.active) return;
+    state.currentPrompt = event.prompt;
+    captureContextUsage(ctx, state);
+    updateLoopWidget(ctx, state);
     return { systemPrompt: `${event.systemPrompt}\n\n${systemPromptAddon(state)}` };
   });
+}
+
+function recordTurnDuration(state: ReturnType<LoopController["getState"]>): void {
+  if (state.currentTurnStartedAt === null) return;
+  const endedAt = Date.now();
+  const durationMs = Math.max(0, endedAt - state.currentTurnStartedAt);
+  state.lastTurnDurationMs = durationMs;
+  state.turnDurations = [
+    ...state.turnDurations.filter((entry) => entry.globalTurn !== state.totalTurnsStarted),
+    {
+      run: state.currentRun,
+      turn: state.turnsStarted,
+      globalTurn: state.totalTurnsStarted,
+      startedAt: state.currentTurnStartedAt,
+      endedAt,
+      durationMs,
+    },
+  ].slice(-20);
+  state.currentTurnStartedAt = null;
+}
+
+function captureContextUsage(ctx: Parameters<LoopController["getState"]>[0], state: ReturnType<LoopController["getState"]>): void {
+  const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
+  state.contextUsage = usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : null;
 }

@@ -22,9 +22,13 @@ export function scoreLoopResult(input: LoopScoreInput, ruleRegistry?: RuleRegist
   const blockers = buildBlockers(input, caps, categories);
   const hardBlockers = blockers.filter((blocker) => blocker.severity === "blocker");
   const previousScore = typeof input.previousScore === "number" ? input.previousScore : null;
+  const bestPriorScore = typeof input.bestScore === "number" ? input.bestScore : previousScore;
   const baselineScore = typeof input.baselineScore === "number" ? input.baselineScore : null;
   const improvement = previousScore === null ? null : score - previousScore;
   const progress = progressOverBaseline(score, baselineScore);
+  const improvedOverBest = bestPriorScore !== null && score > bestPriorScore;
+  const repeatedPlan = repeatsPriorPlan(input.attempt?.fullPlan, input.priorAttemptPlans ?? []);
+  const changedStrategy = input.attempt?.reusedPriorPlan !== true && !repeatedPlan;
 
   const result = {
     score,
@@ -32,12 +36,12 @@ export function scoreLoopResult(input: LoopScoreInput, ruleRegistry?: RuleRegist
     targetScore,
     baselineScore,
     progressPercent: progress,
-    passedDefinition: baselineScore !== null && progress !== null && progress > 0 && hardBlockers.length === 0,
+    passedDefinition: baselineScore !== null && progress !== null && progress > 0 && improvedOverBest && changedStrategy && hardBlockers.length === 0,
     improvement,
     categories,
     blockers,
     strengths: buildStrengths(categories),
-    nextActions: buildNextActions(categories, blockers, baselineScore, progress),
+    nextActions: buildNextActions(categories, blockers, baselineScore, progress, improvement, bestPriorScore, score, changedStrategy, repeatedPlan),
     verifierFindings,
   };
 
@@ -54,6 +58,15 @@ function scoreCategories(input: LoopScoreInput): CategoryScore[] {
     scoreReviewGates(input),
     scoreOperability(input),
   ];
+}
+
+function repeatsPriorPlan(currentPlan: string | undefined, priorPlans: readonly string[]): boolean {
+  const normalized = normalizePlan(currentPlan);
+  return Boolean(normalized) && priorPlans.some((plan) => normalizePlan(plan) === normalized);
+}
+
+function normalizePlan(plan: string | undefined): string {
+  return plan?.toLowerCase().replace(/\s+/g, " ").trim() ?? "";
 }
 
 function progressOverBaseline(score: number, baselineScore: number | null): number | null {
@@ -102,11 +115,17 @@ function buildStrengths(categories: CategoryScore[]): string[] {
     .map((categoryScore) => `${categoryScore.label}: ${categoryScore.score}/${categoryScore.max}`);
 }
 
-function buildNextActions(categories: CategoryScore[], blockers: ScoreBlocker[], baselineScore: number | null, progress: number | null): string[] {
+function buildNextActions(categories: CategoryScore[], blockers: ScoreBlocker[], baselineScore: number | null, progress: number | null, improvement: number | null, bestPriorScore: number | null, score: number, changedStrategy: boolean, repeatedPlan: boolean): string[] {
   const actions: string[] = [];
 
-  if (baselineScore === null) actions.push("Baseline recorded; run another loop turn and verify percent improvement before stopping.");
-  else if (progress === null || progress <= 0) actions.push(`Improve over the baseline attempt; current progress is ${formatProgress(progress)}.`);
+  if (baselineScore === null) actions.push("Baseline recorded; run another loop turn and use feedback to explore a better attempt.");
+  else if (repeatedPlan) actions.push("Change strategy before treating this as a useful improvement; the current plan repeats a prior attempt.");
+  else if (!changedStrategy) actions.push("Change strategy before treating this as a useful improvement; the attempt reused a prior plan.");
+  else if (progress === null) actions.push("Score feedback is unavailable; produce concrete evidence and score another materially different attempt.");
+  else if (progress < 0) actions.push(`Recover from regression; current progress is ${formatProgress(progress)} against the baseline attempt.`);
+  else if (progress === 0) actions.push("Score plateaued at the baseline; do not chase the same heuristic score. Try a materially different strategy or add new evidence.");
+  else if (bestPriorScore !== null && score <= bestPriorScore) actions.push(`Keep exploring; current progress is ${formatProgress(progress)} but this attempt did not beat the best prior score.`);
+  else if (improvement !== null && improvement <= 0) actions.push(`Keep exploring; current progress is ${formatProgress(progress)} but the score did not improve over the previous attempt.`);
 
   for (const blocker of blockers.filter((item) => item.severity === "blocker")) actions.push(`Resolve blocker: ${blocker.message}`);
   for (const categoryScore of categories) {

@@ -75,7 +75,7 @@ function renderRow(entry: LoopScoreEntry, index: number, columns: ColumnSpec[], 
 }
 
 function attemptState(entry: LoopScoreEntry): string {
-  if (entry.passedDefinition) return "accepted";
+  if (entry.passedDefinition) return "new-best";
   if (entry.progressPercent === null || entry.progressPercent === undefined) return "baseline";
   if (entry.blockers.some((blocker) => blocker.severity === "blocker")) return "blocked";
   if (entry.outcome === "review_gate_failed") return "gates";
@@ -92,7 +92,7 @@ function detailText(entry: LoopScoreEntry): string {
 }
 
 function stateColor(rowState: string): Parameters<Theme["fg"]>[0] {
-  if (rowState === "accepted") return "success";
+  if (rowState === "new-best") return "success";
   if (rowState === "blocked") return "error";
   if (rowState === "baseline") return "dim";
   return "warning";

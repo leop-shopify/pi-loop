@@ -2,9 +2,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { appendLogEntry } from "./log.ts";
 import type { LoopController } from "./controller.ts";
+import { refineNextActions } from "./feedback-refinement.ts";
 import { formatProgressPercent } from "./progress.ts";
 import { scoreLoopResult, type LoopScoreInput } from "./scoring-heuristics.ts";
-import { baselineScoreValue, deadlineReached, previousScoreValue, scoreEntryFromResult, type LoopRuntimeState } from "./state.ts";
+import { baselineScoreValue, bestScore, previousScoreValue, scoreEntryFromResult, type LoopRuntimeState } from "./state.ts";
 import { ScoreLoopParams } from "./tool-schema.ts";
 import { updateLoopWidget } from "./ui.ts";
 
@@ -12,10 +13,10 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
   pi.registerTool({
     name: controller.scoreToolName,
     label: "Record Loop Evidence",
-    description: "Record the current pi-loop attempt evidence. The first call becomes the hidden baseline; later calls report percent progress over that baseline.",
-    promptSnippet: "Record the current loop attempt evidence for progress-over-baseline feedback.",
+    description: "Record the current pi-loop attempt evidence. The first call becomes the hidden baseline; later calls report feedback and progress without stopping the loop by itself.",
+    promptSnippet: "Record the current loop attempt evidence for feedback; score improvements are observations, not stop commands.",
     promptGuidelines: [
-      "Use score_loop_result at the end of every pi-loop turn before claiming completion.",
+      "Use score_loop_result at the end of every pi-loop turn before claiming completion; scoring feedback never stops the loop by itself.",
       "Provide concrete file paths, command output, checks, and risk evidence. Missing evidence should be reported honestly.",
       "Do not mark mock-only tests or owned-code mocks as good testing evidence.",
     ],
@@ -31,6 +32,8 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
         ...scoreParams,
         goal: state.goal,
         previousScore: previousScoreValue(state),
+        bestScore: bestScore(state)?.score ?? null,
+        priorAttemptPlans: priorAttemptPlans(state),
         baselineScore: baselineScoreValue(state),
         targetScore: state.targetScore,
       }, undefined, { cwd: ctx.cwd });
@@ -38,7 +41,7 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
       state.results.push(entry);
       state.unscoredConsecutiveTurns = 0;
       appendLogEntry(ctx.cwd, entry);
-      updateAfterScore(ctx, controller, state, result.passedDefinition);
+      updateAfterScore(ctx, state);
 
       return {
         content: [{ type: "text", text: formatScoreResponse(result) }],
@@ -49,18 +52,21 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
   });
 }
 
-function updateAfterScore(ctx: ExtensionContext, controller: LoopController, state: LoopRuntimeState, passedDefinition: boolean): void {
-  if (passedDefinition) controller.finishLoop(ctx, state, "verified improvement accepted");
-  else if (deadlineReached(state)) controller.finishLoop(ctx, state, "time limit reached");
-  else updateLoopWidget(ctx, state);
+function updateAfterScore(ctx: ExtensionContext, state: LoopRuntimeState): void {
+  updateLoopWidget(ctx, state);
 }
 
-function formatScoreResponse(result: ReturnType<typeof scoreLoopResult>): string {
+function priorAttemptPlans(state: LoopRuntimeState): string[] {
+  return state.results.map((entry) => entry.attempt?.fullPlan?.trim()).filter((plan): plan is string => Boolean(plan));
+}
+
+export function formatScoreResponse(result: ReturnType<typeof scoreLoopResult>): string {
   const blockerLines = result.blockers.length ? result.blockers.map((blocker) => `- ${blocker.severity}: ${blocker.message}`).join("\n") : "none";
-  const nextLines = result.nextActions.length ? result.nextActions.map((action) => `- ${action}`).join("\n") : "none";
+  const nextActions = refineNextActions(result.nextActions, "Choose a materially different next action and score again.");
+  const nextLines = nextActions.length ? nextActions.map((action) => `- ${action}`).join("\n") : "none";
   const findingLines = result.verifierFindings.length ? result.verifierFindings.map((finding) => `- ${finding.severity}: ${finding.message}`).join("\n") : "none";
   const progress = formatProgressPercent(result.progressPercent);
-  const status = result.passedDefinition ? "verified improvement accepted" : result.baselineScore === null ? "baseline recorded; continue" : "continue";
+  const status = result.baselineScore === null ? "baseline recorded; continue" : result.passedDefinition ? "new best recorded; continue" : "continue";
 
   return [
     `Progress: ${progress} (${status})`,

@@ -2,8 +2,7 @@ import { formatProgressPercent } from "./progress.ts";
 import type { LoopRuntimeState, LoopScoreEntry } from "./state.ts";
 
 export function finalLoopSummary(state: LoopRuntimeState, reason: string): string {
-  const accepted = [...state.results].reverse().find((entry) => entry.passedDefinition);
-  const progress = accepted ?? bestProgress(state);
+  const progress = bestProgress(state);
   return [
     "pi-loop finished",
     "",
@@ -22,8 +21,7 @@ export function finalLoopSummary(state: LoopRuntimeState, reason: string): strin
 
 function tldr(state: LoopRuntimeState, reason: string, progress: LoopScoreEntry | null): string {
   if (!state.results.length) return `Stopped before any recorded attempt for ${state.goal ?? "the goal"}.`;
-  if (progress?.passedDefinition) return `Accepted ${formatProgressPercent(progress.progressPercent ?? null)} after ${state.results.length} recorded attempt${state.results.length === 1 ? "" : "s"}.`;
-  return `Stopped after ${state.results.length} recorded attempt${state.results.length === 1 ? "" : "s"}; ${reason}.`;
+  return `Stopped after ${state.results.length} recorded attempt${state.results.length === 1 ? "" : "s"}; ${reason}. Best progress ${formatProgressPercent(progress?.progressPercent ?? null)}.`;
 }
 
 function stepLines(state: LoopRuntimeState): string[] {
