@@ -4,6 +4,10 @@
 
 It is meant for quality work where “looks done” is not enough: test improvement, refactors, Rails hardening, verification cleanup, review-gate fixes, and similar engineering tasks.
 
+## Screenshot
+
+![pi-loop running in Pi with the progress panel and step history](docs/images/pi-loop-running.png)
+
 ## What the package installs
 
 This package registers one Pi extension:
