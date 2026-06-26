@@ -45,5 +45,5 @@ export function runBudgetText(state: LoopRuntimeState): string {
   const currentRun = state.currentRun ?? 1;
   const maxRuns = state.maxRuns ?? 1;
   const totalTurns = state.totalTurnsStarted ?? state.turnsStarted;
-  return `run ${currentRun}/${maxRuns}, turn ${Math.min(state.turnsStarted + 1, state.maxTurns)}/${state.maxTurns}, total turns ${totalTurns}/${maxRuns * state.maxTurns}, ${state.maxMinutes} minute global timebox`;
+  return `run ${currentRun}/${maxRuns}, turn ${Math.min(state.turnsStarted + 1, state.maxTurns)}/${state.maxTurns}, total turns ${totalTurns}/${maxRuns * state.maxTurns}, ${state.maxMinutes} minute capped timebox`;
 }

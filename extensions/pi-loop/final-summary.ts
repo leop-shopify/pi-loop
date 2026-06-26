@@ -10,7 +10,7 @@ export function finalLoopSummary(state: LoopRuntimeState, reason: string): strin
     "",
     "Accomplished:",
     `- Goal: ${state.goal ?? "unknown"}`,
-    `- Result: ${progress?.summary ?? reason}`,
+    `- Result: ${resultLine(state, reason, progress)}`,
     `- Stop reason: ${reason}`,
     `- Best progress: ${progress ? `${formatProgressPercent(progress.progressPercent ?? null)} in run ${progress.run ?? 1}, turn ${progress.turn}` : "none"}`,
     "",
@@ -24,20 +24,25 @@ function tldr(state: LoopRuntimeState, reason: string, progress: LoopScoreEntry 
   return `Stopped after ${state.results.length} recorded attempt${state.results.length === 1 ? "" : "s"}; ${reason}. Best progress ${formatProgressPercent(progress?.progressPercent ?? null)}.`;
 }
 
+function resultLine(state: LoopRuntimeState, reason: string, progress: LoopScoreEntry | null): string {
+  const latest = state.results.at(-1);
+  if (!latest) return reason;
+  const latestProgress = formatProgressPercent(latest.progressPercent ?? null);
+  const best = progress ? `${formatProgressPercent(progress.progressPercent ?? null)} in run ${progress.run ?? 1}, turn ${progress.turn}` : "none";
+  return `${state.results.length} recorded attempt${state.results.length === 1 ? "" : "s"}; latest ${entryOutcome(latest)} at ${latestProgress}; best ${best}`;
+}
+
 function stepLines(state: LoopRuntimeState): string[] {
   if (!state.results.length) return ["- No loop attempts were recorded."];
   return state.results.map((entry) => {
-    const parts = [
-      `run ${entry.run ?? 1}, turn ${entry.turn}`,
-      formatProgressPercent(entry.progressPercent ?? null),
-      entry.summary,
-    ];
-    const actions = entry.attempt?.actionsTaken?.slice(0, 3);
-    const suffix = actions?.length ? ` Steps: ${actions.join("; ")}.` : "";
-    const blockers = entry.blockers.filter((blocker) => blocker.severity === "blocker").slice(0, 2);
-    const blockerText = blockers.length ? ` Blockers: ${blockers.map((blocker) => blocker.message).join("; ")}.` : "";
-    return `- ${parts.join(" — ")}.${suffix}${blockerText}`;
+    const blockerCount = entry.blockers.filter((blocker) => blocker.severity === "blocker").length;
+    const blockerText = blockerCount ? `; ${blockerCount} blocker${blockerCount === 1 ? "" : "s"}` : "";
+    return `- run ${entry.run ?? 1}, turn ${entry.turn} — ${formatProgressPercent(entry.progressPercent ?? null)} — ${entryOutcome(entry)}${blockerText}.`;
   });
+}
+
+function entryOutcome(entry: LoopScoreEntry): string {
+  return entry.outcome ?? (entry.passedDefinition ? "successful_improvement" : "needs_iteration");
 }
 
 function bestProgress(state: LoopRuntimeState): LoopScoreEntry | null {

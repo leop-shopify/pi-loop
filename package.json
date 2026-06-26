@@ -35,6 +35,7 @@
     "smoke": "node tests/smoke-pi-extension.mjs"
   },
   "dependencies": {
+    "pi-ace-adapter": "file:../pi-ace-adapter",
     "typebox": "1.2.14"
   },
   "peerDependencies": {

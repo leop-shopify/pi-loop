@@ -1,11 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { buildAceLoopContext } from "./ace-context.ts";
 import { MAX_UNSCORED_REMINDERS } from "./constants.ts";
 import type { LoopController } from "./controller.ts";
 import { appendLogEntry, reconstructLoopState } from "./log.ts";
 import { assistantTextFromEvent, hasCompletionClaim, missingScoreReason, prematureStopPrompt } from "./premature-stop.ts";
 import { continuePrompt, missingScorePrompt, nextRunPrompt, systemPromptAddon } from "./prompt.ts";
 import { canStartNextRun, currentRunCanContinue, markCurrentRunStopped, startNextRun } from "./run-manager.ts";
+import { loopTurnDetail, sendLoopStepMessage } from "./step-message.ts";
 import { updateLoopWidget } from "./ui.ts";
 
 export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController): void {
@@ -33,6 +35,7 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     if (run) run.turnsStarted = state.turnsStarted;
     captureContextUsage(ctx, state);
     updateLoopWidget(ctx, state);
+    sendLoopStepMessage(pi, state, "starting agent work", loopTurnDetail(state));
   });
 
   pi.on("agent_end", async (event, ctx) => {
@@ -41,6 +44,7 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     recordTurnDuration(state);
     captureContextUsage(ctx, state);
     updateLoopWidget(ctx, state);
+    sendLoopStepMessage(pi, state, "review loop", loopTurnDetail(state));
     if (controller.enforceLimits(ctx, state)) return;
 
     const claimedCompletion = hasCompletionClaim(assistantTextFromEvent(event));
@@ -48,6 +52,7 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     if (!scoredThisTurn) {
       state.unscoredConsecutiveTurns++;
       appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "missing_score", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, reason: missingScoreReason(claimedCompletion), details: { claimedCompletion } });
+      sendLoopStepMessage(pi, state, "missing score", missingScoreReason(claimedCompletion));
       if (state.unscoredConsecutiveTurns > MAX_UNSCORED_REMINDERS) {
         controller.finishLoop(ctx, state, "score tool was not called after repeated reminders");
         return;
@@ -62,7 +67,9 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
       startNextRun(state);
       appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "run_started", timestamp: Date.now(), run: state.currentRun });
       updateLoopWidget(ctx, state);
-      controller.scheduleResume(ctx, state, nextRunPrompt(state));
+      sendLoopStepMessage(pi, state, `restarting loop ${state.currentRun}`, `run ${state.currentRun}/${state.maxRuns}`);
+      const aceContext = await buildAceLoopContext(ctx);
+      controller.scheduleResume(ctx, state, nextRunPrompt(state, { aceContext }));
       return;
     }
 
@@ -70,11 +77,15 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     if (claimedCompletion) {
       state.prematureStopCount++;
       appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "premature_stop", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, score: last?.score, targetScore: last?.targetScore, reason: "completion claim before configured loop stop" });
-      controller.scheduleResume(ctx, state, `${prematureStopPrompt(state)}\n\n${continuePrompt(state)}`);
+      sendLoopStepMessage(pi, state, "continuing loop", "completion claim before configured stop");
+      const aceContext = await buildAceLoopContext(ctx);
+      controller.scheduleResume(ctx, state, `${prematureStopPrompt(state)}\n\n${continuePrompt(state, { aceContext })}`);
       return;
     }
 
-    controller.scheduleResume(ctx, state, continuePrompt(state));
+    sendLoopStepMessage(pi, state, "continuing loop", "scheduled refined prompt");
+    const aceContext = await buildAceLoopContext(ctx);
+    controller.scheduleResume(ctx, state, continuePrompt(state, { aceContext }));
   });
 
   pi.on("before_agent_start", async (event, ctx) => {

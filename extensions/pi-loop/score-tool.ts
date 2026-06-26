@@ -6,6 +6,7 @@ import { refineNextActions } from "./feedback-refinement.ts";
 import { formatProgressPercent } from "./progress.ts";
 import { scoreLoopResult, type LoopScoreInput } from "./scoring-heuristics.ts";
 import { baselineScoreValue, bestScore, previousScoreValue, scoreEntryFromResult, type LoopRuntimeState } from "./state.ts";
+import { sendLoopStepMessage } from "./step-message.ts";
 import { ScoreLoopParams } from "./tool-schema.ts";
 import { updateLoopWidget } from "./ui.ts";
 
@@ -42,6 +43,7 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
       state.unscoredConsecutiveTurns = 0;
       appendLogEntry(ctx.cwd, entry);
       updateAfterScore(ctx, state);
+      sendLoopStepMessage(pi, state, "feedback", formatProgressPercent(result.progressPercent));
 
       return {
         content: [{ type: "text", text: formatScoreResponse(result) }],

@@ -1,8 +1,8 @@
 node_modules/
 .pnpm/
 
-.loop/
 .pi/
+/.*/log.jsonl
 
 coverage/
 dist/

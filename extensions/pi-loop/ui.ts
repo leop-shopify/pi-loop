@@ -46,12 +46,20 @@ export function updateLoopWidget(ctx: ExtensionContext, state: LoopRuntimeState)
   }
 
   captureContextUsage(ctx, state);
-  showFloatingPanel(ctx, PANEL_KEY, state, renderLoopWidget);
+  if (state.panelVisible) showFloatingPanel(ctx, PANEL_KEY, state, renderLoopWidget);
+  else hideFloatingPanel(ctx, PANEL_KEY);
 
-  const last = lastScore(state);
-  const best = bestProgressEntry(state);
-  const status = state.active ? "running" : state.stopReason ?? "stopped";
-  ctx.ui.setStatus(PANEL_KEY, ctx.ui.theme.fg("dim", `loop ${status}${last ? ` progress ${formatProgressPercent(last.progressPercent ?? null)}` : ""}${best ? ` best ${formatProgressPercent(best.progressPercent ?? null)}` : ""}`));
+  ctx.ui.setStatus(PANEL_KEY, undefined);
+}
+
+export function setLoopWidgetVisible(ctx: ExtensionContext, state: LoopRuntimeState, visible: boolean): void {
+  state.panelVisible = visible;
+  updateLoopWidget(ctx, state);
+}
+
+export function toggleLoopWidget(ctx: ExtensionContext, state: LoopRuntimeState): boolean {
+  setLoopWidgetVisible(ctx, state, !state.panelVisible);
+  return state.panelVisible;
 }
 
 export function clearLoopWidget(ctx: ExtensionContext): void {
@@ -105,12 +113,85 @@ function dataLines(state: LoopRuntimeState, width: number, theme: Theme): string
 }
 
 function promptLines(state: LoopRuntimeState, width: number, theme: Theme, maxLines: number): string[] {
-  const prompt = state.currentPrompt ?? state.goal ?? "Waiting for the next loop prompt.";
-  const lines = wrapPlainText(prompt, width, maxLines);
-  return lines.map((line, index) => {
-    const prefix = index === 0 ? theme.fg("muted", "> ") : theme.fg("muted", "  ");
-    return truncateToWidth(prefix + theme.fg("text", line), width, "…", true);
-  });
+  const summaryLines = promptSummaryLines(state, width);
+  const lines = summaryLines.slice(0, maxLines);
+  if (lines.length === 0) return [theme.fg("text", "Waiting for the next loop prompt.")];
+  if (summaryLines.length > maxLines && lines.length > 0) {
+    lines[lines.length - 1] = truncateToWidth(`${lines[lines.length - 1]} …`, width, "…", true);
+  }
+  return lines.map((line) => truncateToWidth(theme.fg("text", line), width, "…", true));
+}
+
+function promptSummaryLines(state: LoopRuntimeState, width: number): string[] {
+  const prompt = state.currentPrompt?.trim() ?? "";
+  const goal = extractLineValue(prompt, "Goal") ?? state.goal ?? "Waiting for the next loop prompt.";
+  const direction = firstPresent(
+    extractSection(prompt, "Required new direction"),
+    extractSection(prompt, "Top next actions"),
+    extractSection(prompt, "Next actions from scorer"),
+    extractSection(prompt, "Scorer-suggested directions"),
+  );
+  const progress = extractLineValue(prompt, "Last progress") ?? lastScoreProgressText(state);
+  const budget = extractLineValue(prompt, "Budget");
+  const rawFallback = prompt && !direction && !/^Continue the pi-loop workflow/i.test(prompt) ? prompt : undefined;
+
+  const items: Array<[string, string]> = [
+    ["Now", rawFallback ? compactSummaryText(rawFallback, 300) : `continue the loop with a concrete plan for ${compactSummaryText(goal, 160)}`],
+  ];
+  if (progress) items.push(["Signal", compactSummaryText(progress, 180)]);
+  if (direction) items.push(["Plan", compactSummaryText(direction, 320)]);
+  if (budget) items.push(["Budget", compactSummaryText(budget, 180)]);
+  items.push(["Expected", "finish one verifiable slice, run the relevant checks, call score_loop_result, and carry leftovers into the next attempt"]);
+
+  return items.flatMap(([label, value]) => labeledWrappedLines(label, value, width));
+}
+
+function labeledWrappedLines(label: string, value: string, width: number): string[] {
+  const prefix = `${label}: `;
+  const prefixWidth = visibleWidth(prefix);
+  const valueWidth = Math.max(1, width - prefixWidth);
+  const wrapped = wrapPlainTextFully(value, valueWidth);
+  if (wrapped.length === 0) return [prefix.trimEnd()];
+  return wrapped.map((line, index) => `${index === 0 ? prefix : " ".repeat(prefixWidth)}${line}`);
+}
+
+function extractLineValue(text: string, label: string): string | undefined {
+  const prefix = `${label}:`;
+  const line = text.split(/\r?\n/).find((item) => item.trimStart().startsWith(prefix));
+  const value = line?.trimStart().slice(prefix.length).trim();
+  return value || undefined;
+}
+
+function extractSection(text: string, label: string): string | undefined {
+  const lines = text.split(/\r?\n/);
+  const prefix = `${label}:`;
+  const start = lines.findIndex((line) => line.trimStart().startsWith(prefix));
+  if (start === -1) return undefined;
+  const first = lines[start].trimStart().slice(prefix.length).trim();
+  const collected: string[] = first ? [first] : [];
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line.trim()) break;
+    if (/^[A-Z][A-Za-z0-9 /-]{2,}:\s*/.test(line) && !line.trimStart().startsWith("- ")) break;
+    collected.push(line.trim());
+  }
+  const normalized = collected.map((line) => line.replace(/^[-*]\s*/, "")).join("; ").replace(/\s+/g, " ").trim();
+  return normalized || undefined;
+}
+
+function firstPresent(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => Boolean(value));
+}
+
+function lastScoreProgressText(state: LoopRuntimeState): string | undefined {
+  const score = lastScore(state);
+  return score ? formatProgressPercent(score.progressPercent ?? null) : undefined;
+}
+
+function compactSummaryText(text: string, maxChars: number): string {
+  const compacted = text.replace(/\s+/g, " ").trim();
+  if (compacted.length <= maxChars) return compacted;
+  return `${compacted.slice(0, maxChars).replace(/\s+\S*$/, "").trimEnd()}…`;
 }
 
 function promptLineLimitForHeight(targetHeight: number, dataRows: number, historyRows: number): number {
@@ -142,7 +223,7 @@ function renderHistoryStep(step: RuntimeStepRow, width: number, theme: Theme): s
 function recentTurnLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
   if (state.turnDurations.length === 0) return [];
   const recent = state.turnDurations.slice(-4).map((entry) => `#${entry.globalTurn} ${formatElapsed(entry.durationMs)}`).join(", ");
-  return [keyValueLine("recent", recent, width, theme)];
+  return keyValueWrappedLines("recent", recent, width, theme);
 }
 
 function contextUsageText(state: LoopRuntimeState): string {
@@ -156,6 +237,18 @@ function contextUsageText(state: LoopRuntimeState): string {
 function keyValueLine(key: string, value: string, width: number, theme: Theme): string {
   const label = `${key}: `;
   return truncateToWidth(theme.fg("muted", label) + theme.fg("text", value), width, "…", true);
+}
+
+function keyValueWrappedLines(key: string, value: string, width: number, theme: Theme, maxLines = Number.POSITIVE_INFINITY): string[] {
+  const label = `${key}: `;
+  const labelWidth = visibleWidth(label);
+  const valueWidth = Math.max(1, width - labelWidth);
+  const wrapped = wrapPlainTextFully(value, valueWidth).slice(0, maxLines);
+  if (wrapped.length === 0) return [truncateToWidth(theme.fg("muted", label), width, "…", true)];
+  return wrapped.map((line, index) => {
+    const prefix = index === 0 ? label : " ".repeat(labelWidth);
+    return truncateToWidth(theme.fg("muted", prefix) + theme.fg("text", line), width, "…", true);
+  });
 }
 
 function progressBar(percent: number, width: number, theme: Theme): string {
@@ -229,6 +322,27 @@ function wrapPlainText(text: string, width: number, maxLines: number): string[] 
   }
 
   return lines.slice(0, maxLines);
+}
+
+function wrapPlainTextFully(text: string, width: number): string[] {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  const words = normalized.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (visibleWidth(next) <= width) {
+      current = next;
+      continue;
+    }
+    if (current) lines.push(current);
+    current = word;
+  }
+
+  if (current) lines.push(current);
+  return lines;
 }
 
 function compactNumber(value: number): string {

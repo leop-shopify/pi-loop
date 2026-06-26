@@ -6,8 +6,8 @@ export const strongInput = {
     { path: "extensions/pi-loop/scoring-heuristics.ts", purpose: "rubric", evidence: "single scoring source of truth", kind: "source" },
   ],
   requirements: [
-    { description: "defaults to 120 minutes", status: "met", evidence: "DEFAULT_MINUTES = 120" },
-    { description: "defaults to 20 turns", status: "met", evidence: "DEFAULT_TURNS = 20" },
+    { description: "defaults to 10 capped minutes", status: "met", evidence: "DEFAULT_MINUTES = 10 and MAX_MINUTES = 10" },
+    { description: "defaults to 12 turns", status: "met", evidence: "DEFAULT_TURNS = 12" },
     { description: "shows progress", status: "met", evidence: "renderLoopWidget" },
   ],
   attempt: {

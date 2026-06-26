@@ -5,19 +5,25 @@ import { scoringRubricSummary } from "./scoring-heuristics.ts";
 import type { LoopRuntimeState, LoopScoreEntry } from "./state.ts";
 import { formatTargetContext } from "./target-context.ts";
 
-export function kickoffPrompt(state: LoopRuntimeState): string {
+export interface LoopPromptOptions {
+  aceContext?: string;
+}
+
+export function kickoffPrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
   return [
     `Start the pi-loop workflow for this goal: ${state.goal ?? ""}`,
     "First analyze the problem, files likely involved, acceptance criteria, and verification strategy.",
     "Then implement or investigate using any Pi tools that are useful.",
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
+    promptAceContext(options),
+    "Keep this attempt short: complete a verifiable slice within the loop cap and move unfinished tasks to the next scored attempt.",
     "At the end of this turn, call score_loop_result with concrete evidence from the attempt plan, requirements, artifacts, verification checks, automated review gates, tests, design, Rails considerations, operability, and risks.",
     "Do not claim completion without scoring the attempt.",
     scoringRubricSummary(),
   ].join("\n\n");
 }
 
-export function continuePrompt(state: LoopRuntimeState): string {
+export function continuePrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
   const last = state.results[state.results.length - 1];
   const scoreLine = last ? `Last progress: ${formatProgress(last.progressPercent ?? null)}.` : "No baseline has been recorded yet; the first score_loop_result call records it.";
   const nextActions = last?.nextActions.length ? `Next actions from scorer:\n${refineNextActions(last.nextActions).map((action) => `- ${action}`).join("\n")}` : "Next action: produce concrete evidence and score this loop attempt.";
@@ -29,12 +35,12 @@ export function continuePrompt(state: LoopRuntimeState): string {
     scoreLine,
     refinementObservation(state),
     formatFeedbackHistory(state),
+    promptAceContext(options),
     blockers,
     nextActions,
     `Budget: ${runBudgetText(state)}.`,
-    "Strategy rule: the next attempt must differ from the previous attempt and the best prior attempt. Do not repeat the same plan, same evidence, or same checks unless you explain why that reuse is necessary.",
-    "Heuristic satisfaction is not enough. Positive progress, a new best score, or a high category score is feedback only; keep exploring until a configured limit or user stop.",
-    "Use any Pi tools that help. Prefer real verification over claims.",
+    "Strategy rule: use ACE context and scorer feedback to choose a different, verifiable slice. Do not repeat the same plan, evidence, or checks unless you explain why reuse is necessary.",
+    "Progress is feedback only; verify one slice, score it, and carry unfinished work into the next scored attempt.",
     "At the end of this turn, call score_loop_result with attempt.rationale and attempt.fullPlan describing the strategy change. Set attempt.reusedPriorPlan false unless the turn is explicitly blocked.",
   ].join("\n\n");
 }
@@ -49,14 +55,15 @@ export function missingScorePrompt(state: LoopRuntimeState, claimedCompletion = 
   ].join("\n\n");
 }
 
-export function nextRunPrompt(state: LoopRuntimeState): string {
+export function nextRunPrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
   return [
     "Start the next pi-loop run for the same goal with a refined strategy.",
     `Goal: ${state.goal ?? ""}`,
     refinementObservation(state),
     `Budget: ${runBudgetText(state)}.`,
     formatFeedbackHistory(state),
-    "Use a genuinely different plan from prior attempts. State the new direction in attempt.rationale and attempt.fullPlan, then call score_loop_result at the end of the turn.",
+    promptAceContext(options),
+    "Use ACE context plus prior feedback to choose a genuinely different short plan. State the new direction in attempt.rationale and attempt.fullPlan, then call score_loop_result at the end of the turn.",
   ].join("\n\n");
 }
 
@@ -64,15 +71,20 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
   return [
     "## pi-loop mode active",
     `Goal: ${state.goal ?? ""}`,
-    `Limits: ${state.maxMinutes} minutes, ${state.maxTurns} turns per run, and ${state.maxRuns} run(s). Defaults are 120 minutes, 20 turns, and 1 run unless the user configured otherwise.`,
+    `Limits: ${state.maxMinutes} minutes, ${state.maxTurns} turns per run, and ${state.maxRuns} run(s). Defaults are 10 minutes, 12 turns, and 1 run unless the user configured otherwise; minutes are capped at 10.`,
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
     "A loop turn starts when the agent begins work and ends when it reports evidence through score_loop_result. The extension treats the first scored turn as a hidden baseline and keeps using feedback until a configured limit or user stop is reached.",
     "You may use any active Pi tools needed to solve the goal. The extension does not sandbox your tool choices, so be disciplined and produce evidence.",
     "You must call score_loop_result before presenting a completion claim.",
     "Include attempt.rationale and attempt.fullPlan so the next refined prompt can compare strategy against prior attempts.",
     "Hard rules: map requirements, list artifacts, use real passed checks, include automated review gate evidence for executable changes, assert observable behavior, do not use mock-only or implementation-coupled tests, do not mock owned code, keep responsibilities split, avoid god files, and apply Rails engineering safety when Rails code is involved.",
+    "Loop pacing: finish a verifiable slice within the 10-minute cap; unfinished tasks should move to the next scored attempt.",
     scoringRubricSummary(),
   ].join("\n");
+}
+
+function promptAceContext(options: LoopPromptOptions): string | undefined {
+  return options.aceContext?.trim() ? options.aceContext.trim() : undefined;
 }
 
 function refinementObservation(state: LoopRuntimeState): string {

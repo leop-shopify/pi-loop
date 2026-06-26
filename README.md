@@ -1,6 +1,6 @@
 # pi-loop
 
-`pi-loop` is a Pi extension for bounded, progress-guided software engineering loops. The first scored turn becomes the hidden baseline; later turns use scoring as feedback and keep exploring until configured safety limits or the user stops the loop.
+`pi-loop` is a Pi extension for bounded, progress-guided software engineering loops. The first scored turn becomes the hidden baseline; later turns use scoring as feedback and keep exploring until configured safety limits or the user stops the loop. Continuation prompts can enrich the next attempt with a compact ACE playbook from `pi-ace-adapter` when project ACE storage is enabled.
 
 It is meant for quality work where “looks done” is not enough: test improvement, refactors, Rails hardening, verification cleanup, review-gate fixes, and similar engineering tasks.
 
@@ -27,9 +27,13 @@ The extension adds:
 | Command | `/loop` | Starts, stops, clears, and reports loop status. |
 | Tool | `score_loop_result` | Records concrete engineering evidence and reports feedback; progress is an observation, not a stop command. |
 | UI | floating right-side panel | Shows runtime data, current prompt, timing, tokens, and bounded step history. |
-| State | `.loop/log.jsonl` | Persists loop config, internal measurements, progress entries, and stop events in the current working directory. Active loops are bound to the Pi session that started them. |
+| State | `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` | Persists loop config, internal measurements, progress entries, and stop events in Pi's global agent directory. Active loops are bound to the Pi session that started them. |
 
 ## Install
+
+### ACE adapter dependency
+
+This branch expects the sibling checkout `~/Poetry/pi-ace-adapter` and declares it as `pi-ace-adapter: file:../pi-ace-adapter` for local development. Keep the two checkouts side by side when installing locally. Before publishing or installing from a remote, replace that file dependency with the adapter's git or registry spec; pi-loop only imports the stable `pi-ace-adapter/context` resolver and never registers the adapter extension or prompt injector.
 
 Local development install:
 
@@ -59,18 +63,23 @@ pi install -l ~/src/pi-loop
 
 ```text
 /loop <goal>
-/loop <goal> --minutes=90 --turns=30 --runs=2
+/loop <goal> --minutes=10 --turns=12 --runs=2
 /loop status
+/pi-loop hide
+/pi-loop show
+/pi-loop toggle
 /loop off
 /loop clear
 ```
+
+Shortcut: `Ctrl+Alt+L` toggles the floating panel without changing loop execution.
 
 Defaults:
 
 | Setting | Default |
 | --- | --- |
-| Timebox | 120 minutes |
-| Turn limit | 20 turns |
+| Timebox | 10 minutes (capped) |
+| Turn limit | 12 total attempts |
 | Run count | 1 |
 
 ## Paper model mapped to pi-loop
@@ -87,26 +96,26 @@ Defaults:
 | Response parser | Extracts the schedule from the LLM response. | TypeBox validates the `score_loop_result` input schema, including enum-safe attempt, check, artifact, risk, and review-gate evidence. |
 | Validity and legality checks | Lightweight syntax checks plus compiler legality checks. | Strict schema validation, independent evidence verification, and scoring hard caps flag or cap weak evidence and unresolved risks; pi-loop still does not formally prove arbitrary code safety. |
 | Compiler/runtime feedback | Reports invalid, illegal, solver failure, crash, or successful speedup/slowdown. | Reports typed outcome plus progress/evidence feedback: baseline recorded, new-best progress, verifier findings, blockers, strengths, and next actions. |
-| Optimization history | Feedback is appended to the dialogue so the next iteration can adapt. | Progress entries are appended to `.loop/log.jsonl`; continuation prompts are rebuilt as refined prompts with what was tried, what did not improve, plateau/repeat signals, best attempt to beat, blockers, next actions, and budget. |
-| Stopping condition | Stop command or iteration limit; the framework can push past premature LLM stop attempts. | Timebox, turn limit, run limit, user stop, or repeated missing scorer calls. Positive heuristic progress alone never stops the loop. |
+| Optimization history | Feedback is appended to the dialogue so the next iteration can adapt. | Progress entries are appended to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`; continuation prompts are rebuilt as refined prompts with what was tried, what did not improve, plateau/repeat signals, best attempt to beat, blockers, next actions, budget, and compact ACE playbook context from `pi-ace-adapter` when enabled. |
+| Stopping condition | Stop command or iteration limit; the framework can push past premature LLM stop attempts. | A 10-minute capped timebox, 12-attempt global turn budget, run limit, user stop, or repeated missing scorer calls. Positive heuristic progress alone never stops the loop. |
 
 ## Runtime context steps
 
 1. `/loop <goal>` parses command input into a loop config: goal, max turns, max runs, and max minutes.
 2. pi-loop builds a bounded context snapshot from the current working directory, package scripts, git state, changed files, and prior scored attempts.
-3. The config plus context snapshot and current Pi session id are appended to `.loop/log.jsonl` as a `config` entry.
+3. The config plus context snapshot and current Pi session id are appended to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` as a `config` entry.
 4. `score_loop_result` is activated for the session.
-5. A kickoff prompt is sent as a normal user message. It includes the context snapshot and asks the agent to analyze first, then work, then score.
+5. A kickoff prompt is sent as a normal user message. It includes the context snapshot, compact ACE context when enabled, and asks the agent to analyze first, then work, then score.
 6. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules, and evidence requirements.
 7. On `agent_start`, pi-loop increments the turn counter and records how many score entries existed before the turn.
 8. The agent works with normal Pi tooling. pi-loop does not sandbox tools or prescribe the implementation path.
 9. Before claiming completion, the agent must call `score_loop_result` with structured attempt and evidence.
-10. The score tool verifies evidence, classifies the outcome, appends a progress entry to `.loop/log.jsonl`, updates the widget, and returns progress feedback. The first call records only the baseline.
+10. The score tool verifies evidence, classifies the outcome, appends a progress entry to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`, updates the widget, and returns progress feedback. The first call records only the baseline.
 11. On `agent_end`, pi-loop checks whether the turn produced a score:
     - if not, it schedules a missing-score prompt
-    - it schedules a refined continuation prompt using tried actions, non-improvements, plateau/repeat analysis, blockers, next actions, and remaining budget
-    - if a safety limit is hit, it appends a stop event, sends a concise TL;DR summary with each loop step taken, disables the score tool, and clears the widget/status UI
-12. On the next event in the same Pi session, pi-loop reconstructs active state from `.loop/log.jsonl` and resumes the widget/tool state when limits have not been reached. A different Pi session ignores that active loop and must start its own `/loop`.
+    - it schedules a refined continuation prompt using tried actions, non-improvements, plateau/repeat analysis, blockers, next actions, remaining budget, and compact ACE context when enabled
+    - if a safety limit is hit, it appends a stop event, sends a concise TL;DR summary with each loop step taken, disables the score tool, and clears the widget
+12. On the next event in the same Pi session, pi-loop reconstructs active state from `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` and resumes the widget/tool state when limits have not been reached. A different Pi session ignores that active loop and must start its own `/loop`.
 
 ## Input structure
 
@@ -115,7 +124,7 @@ There are two inputs: the command input and the scoring input.
 ### `/loop` command input
 
 ```text
-/loop <goal> [--minutes=120] [--turns=20] [--runs=1]
+/loop <goal> [--minutes=10] [--turns=12] [--runs=1]
 /loop <goal> [--file=path] [--symbol=Name] [--check="pnpm test tests/foo.test.mjs"]
 ```
 
@@ -133,7 +142,7 @@ Parsed config:
 }
 ```
 
-`--turns` is per run when `--runs > 1`. `--minutes` remains a global timebox across all runs. `--runs` is capped at 5 and `runs * turns` must stay within the global safety cap.
+`--turns` is per run when `--runs > 1`, but it is capped at 12 and `runs * turns` must stay within the 12-attempt global safety cap. `--minutes` remains a global timebox across all runs and is capped at 10 minutes; unfinished work should move to the next scored attempt instead of stretching the turn. `--runs` is capped at 5.
 
 ### `score_loop_result` tool input
 
@@ -222,7 +231,7 @@ Structured details keep internal measurement fields for persistence and automate
 
 ### Persistent log output
 
-`.loop/log.jsonl` stores three entry kinds:
+`~/.pi/agent/pi-loop/projects/<project>/log.jsonl` stores three entry kinds:
 
 ```ts
 { type: "config"; schemaVersion?: 2; goal: string; targetScore: number; maxTurns: number; maxMinutes: number; maxRuns?: number; startedAt: number; sessionId?: string; targetContext?: TargetContextSnapshot }
@@ -232,7 +241,7 @@ Structured details keep internal measurement fields for persistence and automate
 
 ### UI output
 
-The floating right-side panel renders at 25% terminal width and full terminal height. It shows runtime data, a current prompt section that starts at 15 wrapped lines (3× the former 5-line prompt window) and expands into available vertical space so long prompts stay readable, and the full runtime step history so the README model is visible while the loop runs:
+The floating right-side panel renders at 25% terminal width and 95% terminal height. It shows runtime data, a current prompt section summarized into useful execution news (`Now`, `Signal`, `Plan`, `Budget`, `Expected`) instead of raw “continue the loop” boilerplate, recent turn durations that wrap across lines instead of truncating, and the full runtime step history so the README model is visible while the loop runs. Toggle the panel with `Ctrl+Alt+L`, `/pi-loop hide`, `/pi-loop show`, or `/pi-loop toggle`:
 
 ```text
 ╭──────────── pi-loop <status> ────────────╮
@@ -243,8 +252,14 @@ The floating right-side panel renders at 25% terminal width and full terminal he
 │tokens: <used>/<window> <percent>         │
 │progress: <baseline|+N.N% over baseline>  │
 │best: <+N.N% over baseline run n|none>    │
+│recent: #1 9m 12s, #2 8m 03s             │
+│        #3 10m 00s, #4 2m 17s            │
 │──────── current prompt ────────          │
-│> Continue the pi-loop workflow...        │
+│Now: continue the loop with a concrete    │
+│     plan for <goal>                      │
+│Signal: <last progress or baseline>       │
+│Plan: <next action to try>                │
+│Expected: finish one verifiable slice...  │
 │──────── step history ────────            │
 │  07 done  start turn - turn <n>/<max>    │
 │> 08 now   agent work - work in progress  │
@@ -253,7 +268,7 @@ The floating right-side panel renders at 25% terminal width and full terminal he
 ╰──────────────────────────────────────────╯
 ```
 
-The runtime step table is the live version of the “Runtime context steps” section: `/loop status` prints all 12 steps, and the panel shows all 12 steps in its expanded layout. `done` is only for completed past steps; future steps render as `next`/waiting until the active step advances. When the loop finishes, pi-loop clears the widget/status UI and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
+The runtime step table is the live version of the “Runtime context steps” section: `/loop status` prints all 12 steps, and the panel shows all 12 steps in its expanded layout. `done` is only for completed past steps; future steps render as `next`/waiting until the active step advances. The floating panel carries loop progress while Pi's footer remains reserved for Pi status. When the loop finishes, pi-loop clears the widget and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
 
 ### Sequential best-of-K runs
 
@@ -276,7 +291,7 @@ If a turn ends without `score_loop_result`, pi-loop appends a `missing_score` ev
 Start Pi in a repository, then run:
 
 ```text
-/loop Improve the CartCalculator discount tests so they prove behavior without mocking owned code --minutes=45 --turns=8
+/loop Improve the CartCalculator discount tests so they prove behavior without mocking owned code --minutes=10 --turns=8
 ```
 
 Expected first turn:
@@ -475,7 +490,7 @@ User
   | config + context entry     | active scorer
   v                            v
 +-----------------------+    +--------------------------+
-| .loop/log.jsonl       |    | score_loop_result tool   |
+| ~/.pi/agent/pi-loop/... |  | score_loop_result tool   |
 | append config         |    | enabled for this session |
 +-----------------------+    +--------------------------+
   |
@@ -536,7 +551,7 @@ PHASE 2: ITERATIVE OPTIMIZATION LOOP
   | progress entry             | visible feedback
   v                            v
 +-----------------------+    +--------------------------+
-| .loop/log.jsonl       |    | Floating side panel     |
+| ~/.pi/agent/pi-loop/... |  | Floating side panel     |
 | append progress/outcome|   | data / prompt / history |
 +-----------------------+    +--------------------------+
   |
@@ -596,7 +611,7 @@ Pi session_start
   v
 +--------------------------+
 | reconstructLoopState()   |
-| read .loop/log.jsonl     |
+| read ~/.pi/agent/pi-loop |
 | replay config + scores   |
 +--------------------------+
   |
@@ -618,7 +633,7 @@ extensions/pi-loop/loop-command.ts           /loop command registration
 extensions/pi-loop/score-tool.ts             score_loop_result registration
 extensions/pi-loop/tool-schema.ts            strict tool input schema
 extensions/pi-loop/state.ts                  runtime state transitions
-extensions/pi-loop/log.ts                    .loop/log.jsonl persistence
+extensions/pi-loop/log.ts                    ~/.pi/agent/pi-loop/projects persistence
 extensions/pi-loop/ui.ts                     floating right-side progress panel
 extensions/pi-loop/scoring-heuristics.ts     public scoring facade
 extensions/pi-loop/scoring/evidence-verifier.ts independent evidence checks
@@ -647,10 +662,10 @@ pi --mode json --no-session --no-extensions -e ./extensions/pi-loop/index.ts -p 
 
 ## Runtime files
 
-`pi-loop` writes runtime state to the current working directory:
+`pi-loop` writes runtime state only under Pi's global agent directory:
 
 ```text
-.loop/log.jsonl
+~/.pi/agent/pi-loop/projects/<project>/log.jsonl
 ```
 
-That file is intentionally ignored by git. Delete it manually or run `/loop clear` to remove loop state.
+Delete the global log manually or run `/loop clear` to remove loop state.

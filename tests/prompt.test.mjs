@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { continuePrompt } from "../extensions/pi-loop/prompt.ts";
+import { continuePrompt, systemPromptAddon } from "../extensions/pi-loop/prompt.ts";
 
 test("continue prompt includes score, blockers, next actions, and budget", () => {
   const prompt = continuePrompt(loopState({
@@ -30,10 +30,10 @@ test("continue prompt includes score, blockers, next actions, and budget", () =>
   assert.match(prompt, /Blockers from scorer:\n- blocker: Missing passed test check/);
   assert.match(prompt, /Next actions from scorer:\n- Verification: add a passed test check/);
   assert.match(prompt, /Progress trend: r1t2:\+20\.0%/);
-  assert.match(prompt, /Budget: run 1\/1, turn 3\/5, total turns 2\/5, 30 minute global timebox/);
+  assert.match(prompt, /Budget: run 1\/1, turn 3\/5, total turns 2\/5, 30 minute capped timebox/);
   assert.match(prompt, /What was tried: inspected scorer; ran partial checks/);
   assert.match(prompt, /What did not improve enough:/);
-  assert.match(prompt, /Strategy rule: the next attempt must differ/);
+  assert.match(prompt, /Strategy rule: use ACE context and scorer feedback/);
 });
 
 test("continue prompt calls out repeated progress as plateau and rejects heuristic satisfaction", () => {
@@ -47,7 +47,7 @@ test("continue prompt calls out repeated progress as plateau and rejects heurist
   assert.match(prompt, /score did not improve over the previous attempt \(80 <= 80\)/);
   assert.match(prompt, /score did not beat the best prior attempt \(80 <= 80\)/);
   assert.match(prompt, /The next score must show new evidence or explain the blocker; repeated progress is not acceptance/);
-  assert.match(prompt, /Heuristic satisfaction is not enough/);
+  assert.match(prompt, /Progress is feedback only/);
 });
 
 test("continue prompt rewrites stale stop-on-progress scorer actions", () => {
@@ -65,6 +65,25 @@ test("continue prompt rewrites stale stop-on-progress scorer actions", () => {
 
   assert.match(prompt, /Next actions from scorer:\n- Treat baseline progress as feedback only; choose a materially different next action and score again\./);
   assert.doesNotMatch(prompt, /verify percent improvement before stopping/);
+});
+
+test("continue prompt includes ACE context when provided", () => {
+  const prompt = continuePrompt(loopState({
+    totalTurnsStarted: 1,
+    turnsStarted: 1,
+    results: [scoreEntry({ turn: 1, score: 70, progressPercent: null })],
+  }), { aceContext: "## ACE Loop Context\n\nPrefer short verifiable slices." });
+
+  assert.match(prompt, /## ACE Loop Context/);
+  assert.match(prompt, /Prefer short verifiable slices\./);
+  assert.match(prompt, /verify one slice, score it, and carry unfinished work into the next scored attempt\./);
+});
+
+test("system prompt advertises short capped defaults", () => {
+  const prompt = systemPromptAddon(loopState({ maxMinutes: 10, maxTurns: 12 }));
+
+  assert.match(prompt, /Defaults are 10 minutes, 12 turns, and 1 run/);
+  assert.match(prompt, /minutes are capped at 10/);
 });
 
 test("continue prompt includes plateau analysis from feedback history", () => {

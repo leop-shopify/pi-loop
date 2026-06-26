@@ -1,3 +1,4 @@
+import { DEFAULT_MINUTES, DEFAULT_RUNS, DEFAULT_TARGET, DEFAULT_TURNS } from "./constants.ts";
 import type { TargetContextSnapshot } from "./target-context.ts";
 import type { AttemptEvidence, EvidenceVerificationFinding, LoopFeedbackOutcome, LoopScoreResult } from "./scoring-heuristics.ts";
 
@@ -106,6 +107,7 @@ export interface LoopRuntimeState {
   lastTurnDurationMs: number | null;
   turnDurations: LoopTurnDuration[];
   contextUsage: LoopContextUsageSnapshot | null;
+  panelVisible: boolean;
 }
 
 export interface LoopStartOptions {
@@ -123,10 +125,10 @@ export function createLoopState(): LoopRuntimeState {
   return {
     active: false,
     goal: null,
-    targetScore: 90,
-    maxTurns: 20,
-    maxMinutes: 60,
-    maxRuns: 1,
+    targetScore: DEFAULT_TARGET,
+    maxTurns: DEFAULT_TURNS,
+    maxMinutes: DEFAULT_MINUTES,
+    maxRuns: DEFAULT_RUNS,
     currentRun: 1,
     totalTurnsStarted: 0,
     startedAt: null,
@@ -145,6 +147,7 @@ export function createLoopState(): LoopRuntimeState {
     lastTurnDurationMs: null,
     turnDurations: [],
     contextUsage: null,
+    panelVisible: true,
   };
 }
 

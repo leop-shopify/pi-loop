@@ -4,13 +4,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { parseLoopArgs } from "../extensions/pi-loop/commands.ts";
+import { loopHelp, parseLoopArgs } from "../extensions/pi-loop/commands.ts";
 import { buildTargetContextSnapshot, formatTargetContext } from "../extensions/pi-loop/target-context.ts";
 
 function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "pi-loop-target-"));
   try { fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 }
+
+test("loop args default to short capped loops", () => {
+  const parsed = parseLoopArgs("Improve scorer --minutes=90");
+
+  assert.equal(parsed.minutes, 10);
+  assert.equal(parsed.turns, 12);
+  assert.match(loopHelp(), /--minutes=10/);
+  assert.match(loopHelp(), /--turns=12/);
+  assert.match(loopHelp(), /10 minutes and 12 total attempts/);
+});
+
+test("loop args parse panel visibility commands", () => {
+  assert.equal(parseLoopArgs("hide").command, "hide");
+  assert.equal(parseLoopArgs("show").command, "show");
+  assert.equal(parseLoopArgs("toggle").command, "toggle");
+  assert.match(loopHelp(), /\/pi-loop hide \| show \| toggle/);
+});
 
 test("quote-aware args parse explicit files, symbols, checks, and runs", () => {
   const parsed = parseLoopArgs("Improve `CartCalculator` --file=src/cart.ts --symbol=CartCalculator --check=\"pnpm test tests/cart.test.mjs\" --runs=5 --turns=30");
@@ -20,7 +37,7 @@ test("quote-aware args parse explicit files, symbols, checks, and runs", () => {
   assert.deepEqual(parsed.symbols, ["CartCalculator"]);
   assert.deepEqual(parsed.checks, ["pnpm test tests/cart.test.mjs"]);
   assert.equal(parsed.runs, 5);
-  assert.equal(parsed.turns, 30);
+  assert.equal(parsed.turns, 12);
 });
 
 test("target context falls back to runnable npm package-script commands without a lockfile", () => {

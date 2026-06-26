@@ -5,13 +5,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import piLoopExtension from "../extensions/pi-loop/index.ts";
-import { readLogEntries } from "../extensions/pi-loop/log.ts";
+import { deleteLog, readLogEntries } from "../extensions/pi-loop/log.ts";
 
 async function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "pi-loop-e2e-"));
   try {
     return await fn(dir);
   } finally {
+    deleteLog(dir);
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -26,8 +27,14 @@ test("loop process treats scores as feedback and stops only at the configured li
 
     await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=2 --target=90", ctx);
     assert.ok(pi.activeTools.includes("score_loop_result"));
+    assert.equal(pi.commands.has("pi-loop"), true);
+    assert.equal(pi.shortcuts.size, 1);
     assert.match(pi.sentMessages[0].text, /Target context snapshot:/);
     assert.match(pi.sentMessages[0].text, /scripts: test, typecheck/);
+    assert.deepEqual(pi.stepMessages.map((message) => message.content), [
+      "Step: starting loop — run 1/1, 2 attempts max",
+      "Step: kickoff prompt — sent initial loop instructions",
+    ]);
 
     await pi.events.get("agent_start")({}, ctx);
     const baselineResponse = await pi.tools.get("score_loop_result").execute("score-1", weakScoreParams(), new AbortController().signal, () => {}, ctx);
@@ -38,6 +45,8 @@ test("loop process treats scores as feedback and stops only at the configured li
     assert.doesNotMatch(baselineResponse.content[0].text, /Heuristic|Raw score|Score:/);
     assert.equal(baselineResponse.terminate, true);
     assert.equal(pi.activeTools.includes("score_loop_result"), true);
+    assert.ok(pi.stepMessages.some((message) => message.content.startsWith("Step: feedback — baseline recorded")));
+    assert.ok(pi.stepMessages.some((message) => message.content === "Step: review loop — loop 1, turn 1/2, total 1/2"));
 
     await pi.events.get("agent_start")({}, ctx);
     const improvedResponse = await pi.tools.get("score_loop_result").execute("score-2", scoreParams(), new AbortController().signal, () => {}, ctx);
@@ -48,6 +57,8 @@ test("loop process treats scores as feedback and stops only at the configured li
     assert.match(improvedResponse.content[0].text, /Outcome: successful_improvement/);
     assert.doesNotMatch(improvedResponse.content[0].text, /Heuristic|Raw score|Score:/);
     assert.equal(pi.activeTools.includes("score_loop_result"), false);
+    assert.ok(pi.stepMessages.some((message) => message.content.startsWith("Step: starting agent work — loop 1, turn 2/2")));
+    assert.ok(pi.stepMessages.some((message) => /Step: feedback — \+/.test(message.content)));
 
     const entries = readLogEntries(dir);
     assert.deepEqual(entries.map((entry) => entry.type), ["config", "score", "score", "event"]);
@@ -69,6 +80,32 @@ test("loop process treats scores as feedback and stops only at the configured li
     assert.match(finalMessage, /Loop steps:/);
     assert.match(finalMessage, /run 1, turn 1/);
     assert.match(finalMessage, /run 1, turn 2/);
+  });
+});
+
+test("pi-loop alias, hide/show commands, and shortcut control the floating panel", async () => {
+  await withTempDir(async (dir) => {
+    writeProject(dir);
+    const pi = mockPi();
+    const ctx = mockContext(dir, true);
+    piLoopExtension(pi);
+
+    await pi.commands.get("pi-loop").handler("Improve source.ts --minutes=10 --turns=2", ctx);
+    assert.equal(ctx.customCalls, 1);
+    assert.equal(ctx.statusSetCount, 0);
+
+    await pi.commands.get("pi-loop").handler("hide", ctx);
+    assert.equal(ctx.hiddenHandles, 1);
+    assert.equal(ctx.statusSetCount, 0);
+
+    await pi.commands.get("pi-loop").handler("show", ctx);
+    assert.equal(ctx.customCalls, 2);
+    assert.equal(ctx.statusSetCount, 0);
+
+    const shortcut = [...pi.shortcuts.values()][0];
+    await shortcut.handler(ctx);
+    assert.equal(ctx.hiddenHandles, 2);
+    assert.equal(ctx.statusSetCount, 0);
   });
 });
 
@@ -109,6 +146,7 @@ test("multi-run process advances after a failed run and stops when all runs are 
     assert.equal(entries[2].event, "run_stopped");
     assert.equal(entries[3].event, "run_started");
     assert.ok(pi.activeTools.includes("score_loop_result"));
+    assert.ok(pi.stepMessages.some((message) => message.content === "Step: restarting loop 2 — run 2/2"));
 
     await pi.events.get("agent_start")({}, ctx);
     await pi.tools.get("score_loop_result").execute("score-2", scoreParams(), new AbortController().signal, () => {}, ctx);
@@ -180,11 +218,15 @@ function mockPi() {
     events: new Map(),
     activeTools: [],
     sentMessages: [],
+    stepMessages: [],
+    shortcuts: new Map(),
     registerCommand(name, command) { this.commands.set(name, command); },
+    registerShortcut(shortcut, options) { this.shortcuts.set(shortcut, options); },
     registerTool(tool) { this.tools.set(tool.name, tool); },
     on(name, handler) { this.events.set(name, handler); },
     getActiveTools() { return this.activeTools; },
     setActiveTools(tools) { this.activeTools = tools; },
+    sendMessage(message, options) { this.stepMessages.push({ ...message, options }); },
     sendUserMessage(text, options) { this.sentMessages.push({ text, options }); },
   };
 }
@@ -195,10 +237,19 @@ function mockContext(cwd, hasUI = false) {
     hasUI,
     widgetCleared: false,
     statusCleared: false,
+    hiddenHandles: 0,
+    customCalls: 0,
+    statusSetCount: 0,
     ui: {
       notify() {},
       setWidget(_name, widget) { if (widget === undefined) ctx.widgetCleared = true; },
-      setStatus(_name, status) { if (status === undefined) ctx.statusCleared = true; },
+      setStatus(_name, status) { if (status === undefined) ctx.statusCleared = true; else ctx.statusSetCount++; },
+      custom(factory, options) {
+        ctx.customCalls++;
+        const component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_kind, value) => value }, {}, () => {});
+        options.onHandle?.({ hide() { ctx.hiddenHandles++; component.dispose?.(); } });
+        return Promise.resolve();
+      },
       theme: { fg: (_kind, value) => value },
     },
     isIdle: () => true,

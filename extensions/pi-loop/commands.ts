@@ -1,11 +1,11 @@
-import { DEFAULT_MINUTES, DEFAULT_RUNS, DEFAULT_TARGET, DEFAULT_TURNS, MAX_RUNS } from "./constants.ts";
+import { DEFAULT_MINUTES, DEFAULT_RUNS, DEFAULT_TARGET, DEFAULT_TURNS, MAX_MINUTES, MAX_RUNS, MAX_TURNS } from "./constants.ts";
 import { loopLogPath } from "./paths.ts";
 import { bestProgressEntry, formatProgressPercent } from "./progress.ts";
 import { formatRuntimeSteps } from "./runtime-steps.ts";
 import { type LoopRuntimeState } from "./state.ts";
 
 export interface ParsedLoopArgs {
-  command: "start" | "status" | "off" | "clear" | "help";
+  command: "start" | "status" | "off" | "clear" | "hide" | "show" | "toggle" | "help";
   goal: string;
   minutes: number;
   turns: number;
@@ -23,6 +23,9 @@ export function parseLoopArgs(args: string): ParsedLoopArgs {
   if (lower === "status") return defaultArgs("status");
   if (lower === "off" || lower === "stop") return defaultArgs("off");
   if (lower === "clear") return defaultArgs("clear");
+  if (lower === "hide") return defaultArgs("hide");
+  if (lower === "show") return defaultArgs("show");
+  if (lower === "toggle") return defaultArgs("toggle");
   if (lower === "help") return defaultArgs("help");
 
   const parsed = parseStartArgs(tokenizeArgs(trimmed));
@@ -31,13 +34,14 @@ export function parseLoopArgs(args: string): ParsedLoopArgs {
 
 export function loopHelp(): string {
   return [
-    "Usage: /loop <goal> [--minutes=120] [--turns=20] [--target=90] [--runs=1]",
+    "Usage: /loop <goal> [--minutes=10] [--turns=12] [--target=90] [--runs=1]",
     "       /loop <goal> [--file=path] [--symbol=Name] [--check=\"pnpm test\"]",
     "       /loop status",
+    "       /pi-loop hide | show | toggle",
     "       /loop off",
     "       /loop clear",
     "",
-    "The first score is a baseline; later scores are feedback. The loop stops only when limits are reached or the user stops it.",
+    "The first score is a baseline; later scores are feedback. Minutes and turns are capped at 10 minutes and 12 total attempts so unfinished work should carry into the next attempt.",
   ].join("\n");
 }
 
@@ -77,8 +81,8 @@ function parseStartArgs(tokens: string[]) {
 
   for (const token of tokens) {
     const [name, value] = splitFlag(token);
-    if (name === "--minutes") minutes = parsePositiveInt(value, DEFAULT_MINUTES, 1, 24 * 60);
-    else if (name === "--turns") turns = parsePositiveInt(value, DEFAULT_TURNS, 1, 200);
+    if (name === "--minutes") minutes = parsePositiveInt(value, DEFAULT_MINUTES, 1, MAX_MINUTES);
+    else if (name === "--turns") turns = parsePositiveInt(value, DEFAULT_TURNS, 1, MAX_TURNS);
     else if (name === "--target") target = parsePositiveInt(value, DEFAULT_TARGET, 1, 100);
     else if (name === "--runs") runs = parsePositiveInt(value, DEFAULT_RUNS, 1, MAX_RUNS);
     else if (name === "--file" && value) files.push(value);

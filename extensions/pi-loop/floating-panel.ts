@@ -15,7 +15,7 @@ export function floatingPanelOverlayOptions(): OverlayOptions {
     anchor: "right-center",
     width: "25%",
     minWidth: 36,
-    maxHeight: "100%",
+    maxHeight: "95%",
     margin: { right: 1 },
     nonCapturing: true,
     visible: (termWidth) => termWidth >= 80,

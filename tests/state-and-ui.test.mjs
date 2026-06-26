@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { statusText } from "../extensions/pi-loop/commands.ts";
+import { finalLoopSummary } from "../extensions/pi-loop/final-summary.ts";
 import { floatingPanelOverlayOptions } from "../extensions/pi-loop/floating-panel.ts";
 import { scoreLoopResult } from "../extensions/pi-loop/scoring-heuristics.ts";
-import { appendLogEntry, reconstructLoopState } from "../extensions/pi-loop/log.ts";
+import { appendLogEntry, deleteLog, reconstructLoopState } from "../extensions/pi-loop/log.ts";
+import { loopLogPath } from "../extensions/pi-loop/paths.ts";
 import { runtimeStepRows } from "../extensions/pi-loop/runtime-steps.ts";
 import {
   createLoopState,
@@ -24,6 +26,7 @@ function withTempDir(fn) {
   try {
     fn(dir);
   } finally {
+    deleteLog(dir);
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -69,6 +72,9 @@ test("state reconstructs config and score entries from the log", () => {
 
     appendLogEntry(dir, config);
     appendLogEntry(dir, scoreEntry);
+
+    assert.equal(loopLogPath(dir).startsWith(join(homedir(), ".pi", "agent", "pi-loop", "projects")), true);
+    assert.equal(loopLogPath(dir).startsWith(dir), false);
 
     const reconstructed = reconstructLoopState(dir);
 
@@ -183,30 +189,73 @@ test("loop widget renders a passive side-panel dashboard with data, prompt, and 
   assert.match(text, /tokens:/);
   assert.match(text, /progress:/);
   assert.match(text, /recent:/);
-  assert.match(text, /Continue the pi-loop workflow/);
+  assert.match(text, /Now:/);
+  assert.match(text, /continue the loop with a concrete plan/);
+  assert.match(text, /Expected:/);
+  assert.doesNotMatch(text, /Continue the pi-loop workflow/);
   assert.equal(lines.every((line) => visibleWidth(line) <= 52), true);
 });
 
-test("loop widget uses spare panel height for current prompt text", () => {
+test("loop widget summarizes the current prompt as a useful plan", () => {
   const state = createLoopState();
   startLoopState(state, {
-    goal: "show more current prompt text",
+    goal: "show useful current prompt text",
     targetScore: 90,
     maxTurns: 20,
     maxMinutes: 120,
     startedAt: Date.now(),
   });
-  state.currentPrompt = Array.from({ length: 24 }, (_, index) => `prompt-line-${String(index + 1).padStart(2, "0")}-token`).join(" ");
+  state.currentPrompt = [
+    "Continue the pi-loop workflow with a refined prompt, not a passive retry.",
+    "",
+    "Goal: improve pi-loop current prompt display",
+    "Last progress: +15.3% over baseline.",
+    "Required new direction:",
+    "- Build a concise side-panel summary of what the agent is doing now.",
+    "- Show the expected outcome instead of raw continuation boilerplate.",
+    "Budget: run 1/1, turn 5/20.",
+  ].join("\n");
 
-  const lines = renderLoopWidget(state, 28, plainTheme, 80);
-  const promptRows = lines.filter((line) => /prompt-line-\d{2}-token/.test(line));
+  const lines = renderLoopWidget(state, 44, plainTheme, 80);
   const text = lines.join("\n");
 
-  assert.equal(promptRows.length, 24);
-  assert.match(text, /prompt-line-01-token/);
-  assert.match(text, /prompt-line-15-token/);
-  assert.match(text, /prompt-line-24-token/);
-  assert.equal(lines.every((line) => visibleWidth(line) <= 28), true);
+  assert.match(text, /Now:/);
+  assert.match(text, /Signal: \+15\.3%/);
+  assert.match(text, /Plan:/);
+  assert.match(text, /concise side-panel summary/);
+  assert.match(text, /Expected:/);
+  assert.doesNotMatch(text, /Continue the pi-loop workflow/);
+  assert.equal(lines.every((line) => visibleWidth(line) <= 44), true);
+});
+
+test("final summary reports attempt outcomes without raw historical attempt text", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "summarize without stale attempt prose",
+    targetScore: 90,
+    maxTurns: 12,
+    maxMinutes: 10,
+    startedAt: Date.now(),
+  });
+  const stale = progressEntry(1, 10);
+  stale.summary = "stale raw summary should not appear";
+  stale.attempt = { rationale: "old", fullPlan: "old", actionsTaken: ["stale action should not appear"], stopIntent: "claim_done" };
+  stale.outcome = "successful_improvement";
+  stale.blockers = [{ severity: "blocker", message: "stale blocker should not appear" }];
+  const latest = progressEntry(2, 12);
+  latest.summary = "latest raw summary should not appear";
+  latest.outcome = "needs_iteration";
+  state.results.push(stale, latest);
+
+  const text = finalLoopSummary(state, "stopped by user");
+
+  assert.match(text, /Result: 2 recorded attempts; latest needs_iteration at \+12\.0% over baseline; best \+12\.0% over baseline in run 1, turn 2/);
+  assert.match(text, /run 1, turn 1 — \+10\.0% over baseline — successful_improvement; 1 blocker\./);
+  assert.match(text, /run 1, turn 2 — \+12\.0% over baseline — needs_iteration\./);
+  assert.doesNotMatch(text, /stale raw summary/);
+  assert.doesNotMatch(text, /stale action/);
+  assert.doesNotMatch(text, /stale blocker/);
+  assert.doesNotMatch(text, /latest raw summary/);
 });
 
 test("loop status reports the README runtime steps", () => {
@@ -273,7 +322,30 @@ test("runtime steps expose only one active step and defer measure progress until
   const afterWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
   assert.deepEqual(afterWork.filter((step) => step.status === "active").map((step) => step.label), ["measure progress"]);
   assert.equal(afterWorkCurrentLines.length, 1);
-  assert.match(afterWorkCurrentLines[0], /measure progress/);
+  assert.match(afterWorkCurrentLines[0], /review loop/);
+});
+
+test("stale current-turn score cannot override active agent work", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "do not show resume while the agent is working",
+    targetScore: 90,
+    maxTurns: 12,
+    maxMinutes: 10,
+    startedAt: Date.now(),
+  });
+  state.results.push(progressEntry(3, 15.3));
+  state.totalTurnsStarted = 3;
+  state.turnsStarted = 3;
+  state.currentTurnStartedAt = Date.now();
+
+  const rows = runtimeStepRows(state);
+  const historyText = renderLoopWidget(state, 64, plainTheme).join("\n");
+
+  assert.deepEqual(rows.filter((step) => step.status === "active").map((step) => step.label), ["agent work"]);
+  assert.equal(rows.find((step) => step.label === "resume or stop").status, "waiting");
+  assert.match(historyText, /> 08 now\s+agent work/);
+  assert.doesNotMatch(historyText, /> .*resume or stop/);
 });
 
 test("prior scores do not make resume-or-stop active during later agent work", () => {
@@ -304,7 +376,7 @@ test("prior scores do not make resume-or-stop active during later agent work", (
   assert.deepEqual(afterWork.filter((step) => step.status === "active").map((step) => step.label), ["measure progress"]);
   assert.equal(afterWork.find((step) => step.label === "resume or stop").status, "waiting");
   assert.equal(afterWorkCurrentLines.length, 1);
-  assert.match(afterWorkCurrentLines[0], /measure progress/);
+  assert.match(afterWorkCurrentLines[0], /review loop/);
 });
 
 test("loop widget shows the full runtime step history in the expanded panel", () => {
@@ -321,11 +393,40 @@ test("loop widget shows the full runtime step history in the expanded panel", ()
   state.results.push(progressEntry(1, null));
 
   const narrowLines = renderLoopWidget(state, 40, plainTheme);
-  const historyLines = narrowLines.filter((line) => /\b(done|now|next)\b/.test(line));
+  const historyLines = narrowLines.filter((line) => /[>. ]\s*\d{2}\s+(done|now|next)\b/.test(line));
 
-  assert.equal(historyLines.length, 12);
-  assert.match(narrowLines.join("\n"), /> 11 now/);
+  assert.equal(historyLines.length, 3);
+  assert.match(narrowLines.join("\n"), /start turn/);
+  assert.match(narrowLines.join("\n"), /agent work/);
+  assert.match(narrowLines.join("\n"), /> 03 now\s+review loop/);
   assert.equal(narrowLines.every((line) => visibleWidth(line) <= 40), true);
+});
+
+test("recent turn durations wrap instead of truncating", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "wrap recent durations",
+    targetScore: 90,
+    maxTurns: 12,
+    maxMinutes: 10,
+    startedAt: Date.now(),
+  });
+  state.turnDurations = [
+    { run: 1, turn: 1, globalTurn: 1, startedAt: 1, endedAt: 2, durationMs: 1_399_000 },
+    { run: 1, turn: 2, globalTurn: 2, startedAt: 3, endedAt: 4, durationMs: 167_000 },
+    { run: 1, turn: 3, globalTurn: 3, startedAt: 5, endedAt: 6, durationMs: 658_000 },
+    { run: 1, turn: 4, globalTurn: 4, startedAt: 7, endedAt: 8, durationMs: 120_000 },
+  ];
+
+  const lines = renderLoopWidget(state, 42, plainTheme, 80);
+  const recentLines = lines.filter((line) => /recent:|#\d/.test(line));
+  const recentText = recentLines.join("\n");
+
+  assert.ok(recentLines.length > 1);
+  assert.match(recentText, /#1 23m 19s/);
+  assert.match(recentText, /#4 2m 00s/);
+  assert.doesNotMatch(recentText, /…/);
+  assert.equal(lines.every((line) => visibleWidth(line) <= 42), true);
 });
 
 test("loop panel overlay uses Pi's non-capturing right-side overlay", () => {
@@ -334,7 +435,7 @@ test("loop panel overlay uses Pi's non-capturing right-side overlay", () => {
   assert.equal(options.anchor, "right-center");
   assert.equal(options.width, "25%");
   assert.equal(options.minWidth, 36);
-  assert.equal(options.maxHeight, "100%");
+  assert.equal(options.maxHeight, "95%");
   assert.equal(options.nonCapturing, true);
 });
 
@@ -390,6 +491,7 @@ test("updateLoopWidget clears the old bottom widget and opens the floating panel
   const customCall = calls.find((call) => call.type === "custom");
   assert.equal(customCall.options.overlay, true);
   assert.equal(customCall.options.overlayOptions().nonCapturing, true);
+  assert.equal(customCall.options.overlayOptions().maxHeight, "95%");
   assert.equal(renderedLines.length, 40);
 });
 

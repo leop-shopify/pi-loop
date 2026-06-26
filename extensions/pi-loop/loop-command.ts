@@ -1,5 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { Key } from "@earendil-works/pi-tui";
 
+import { buildAceLoopContext } from "./ace-context.ts";
 import { MAX_TOTAL_TURNS } from "./constants.ts";
 import { loopHelp, parseLoopArgs, statusText } from "./commands.ts";
 import { totalTurnBudgetExceeded } from "./run-manager.ts";
@@ -8,12 +10,13 @@ import type { LoopController } from "./controller.ts";
 import { deleteLog, appendLogEntry } from "./log.ts";
 import { kickoffPrompt } from "./prompt.ts";
 import { startLoopState, stopLoop } from "./state.ts";
-import { clearLoopWidget, updateLoopWidget } from "./ui.ts";
+import { sendLoopStepMessage } from "./step-message.ts";
+import { clearLoopWidget, setLoopWidgetVisible, toggleLoopWidget, updateLoopWidget } from "./ui.ts";
 
 export function registerLoopCommand(pi: ExtensionAPI, controller: LoopController): void {
-  pi.registerCommand("loop", {
-    description: "Run a score-guided software engineering loop. Defaults: 120 minutes, 20 turns.",
-    handler: async (args, ctx) => {
+  const command = {
+    description: "Run or control a score-guided software engineering loop. Defaults: 10 minutes, 12 turns.",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
       const parsed = parseLoopArgs(args ?? "");
       const state = controller.getState(ctx);
 
@@ -38,6 +41,21 @@ export function registerLoopCommand(pi: ExtensionAPI, controller: LoopController
         ctx.ui.notify(deleteLog(ctx.cwd) ? "pi-loop log deleted" : "No pi-loop log found", "info");
         return;
       }
+      if (parsed.command === "hide") {
+        setLoopWidgetVisible(ctx, state, false);
+        ctx.ui.notify("pi-loop panel hidden. Use /pi-loop show or Ctrl+Alt+L to restore it.", "info");
+        return;
+      }
+      if (parsed.command === "show") {
+        setLoopWidgetVisible(ctx, state, true);
+        ctx.ui.notify("pi-loop panel shown.", "info");
+        return;
+      }
+      if (parsed.command === "toggle") {
+        const visible = toggleLoopWidget(ctx, state);
+        ctx.ui.notify(`pi-loop panel ${visible ? "shown" : "hidden"}.`, "info");
+        return;
+      }
       if (state.active) {
         ctx.ui.notify("pi-loop is already active. Use /loop off first if you want to restart.", "warning");
         return;
@@ -60,8 +78,22 @@ export function registerLoopCommand(pi: ExtensionAPI, controller: LoopController
       appendLogEntry(ctx.cwd, config);
       controller.setScoreToolActive(true);
       updateLoopWidget(ctx, state);
+      sendLoopStepMessage(pi, state, "starting loop", `run ${state.currentRun}/${state.maxRuns}, ${state.maxTurns} attempts max`);
       ctx.ui.notify(`pi-loop started: ${parsed.minutes} minutes, ${parsed.turns} turns per run, ${parsed.runs} run(s); first score_loop_result call records the baseline`, "info");
-      controller.sendWhenReady(kickoffPrompt(state), ctx);
+      const aceContext = await buildAceLoopContext(ctx);
+      sendLoopStepMessage(pi, state, "kickoff prompt", "sent initial loop instructions");
+      controller.sendWhenReady(kickoffPrompt(state, { aceContext }), ctx);
+    },
+  };
+
+  pi.registerCommand("loop", command);
+  pi.registerCommand("pi-loop", command);
+  pi.registerShortcut(Key.ctrlAlt("l"), {
+    description: "Toggle pi-loop floating panel",
+    handler: async (ctx) => {
+      const state = controller.getState(ctx);
+      const visible = toggleLoopWidget(ctx, state);
+      ctx.ui.notify(`pi-loop panel ${visible ? "shown" : "hidden"}.`, "info");
     },
   });
 }
