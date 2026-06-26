@@ -17,7 +17,7 @@ export function kickoffPrompt(state: LoopRuntimeState, options: LoopPromptOption
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
     promptAceContext(options),
     "Keep this attempt short: complete a verifiable slice within the loop cap and move unfinished tasks to the next scored attempt.",
-    "At the end of this turn, call score_loop_result with concrete evidence from the attempt plan, requirements, artifacts, verification checks, automated review gates, tests, design, Rails considerations, operability, and risks.",
+    "At the end of this turn, call score_loop_result with concrete evidence from the attempt plan, requirements, artifacts, verification checks, automated review gates, tests, design, framework-specific safety when relevant, operability, and risks.",
     "Do not claim completion without scoring the attempt.",
     scoringRubricSummary(),
   ].join("\n\n");
@@ -77,7 +77,7 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
     "You may use any active Pi tools needed to solve the goal. The extension does not sandbox your tool choices, so be disciplined and produce evidence.",
     "You must call score_loop_result before presenting a completion claim.",
     "Include attempt.rationale and attempt.fullPlan so the next refined prompt can compare strategy against prior attempts.",
-    "Hard rules: map requirements, list artifacts, use real passed checks, include automated review gate evidence for executable changes, assert observable behavior, do not use mock-only or implementation-coupled tests, do not mock owned code, keep responsibilities split, avoid god files, and apply Rails engineering safety when Rails code is involved.",
+    "Hard rules: map requirements, list artifacts, use real passed checks, include automated review gate evidence for executable changes, assert observable behavior, do not use mock-only or implementation-coupled tests, do not mock owned code, keep responsibilities split, avoid god files, and apply framework-specific safety when Rails or similar framework code is involved.",
     "Loop pacing: finish a verifiable slice within the 10-minute cap; unfinished tasks should move to the next scored attempt.",
     scoringRubricSummary(),
   ].join("\n");

@@ -64,89 +64,13 @@ export function renderRuntimeStepTable(state: LoopRuntimeState, width: number, t
 }
 
 export function runtimeStepHistoryRows(state: LoopRuntimeState, previousRows = 5, nextRows = 4): RuntimeStepRow[] {
-  const timeline = loopTimelineRows(state);
-  if (!timeline.length) return runtimeStepWindow(runtimeStepRows(state), previousRows, nextRows);
-  return runtimeStepWindow(timeline, previousRows, nextRows);
-}
-
-function runtimeStepWindow(rows: RuntimeStepRow[], previousRows: number, nextRows: number): RuntimeStepRow[] {
-  const limit = previousRows + nextRows + 1;
+  const rows = runtimeStepRows(state);
   const currentIndex = currentRuntimeStepIndex(rows);
-  if (currentIndex === -1) return rows.slice(-limit);
   const start = Math.max(0, currentIndex - previousRows);
-  return rows.slice(start, Math.min(rows.length, currentIndex + nextRows + 1));
-}
-
-function loopTimelineRows(state: LoopRuntimeState): RuntimeStepRow[] {
-  if (state.startedAt === null || state.goal === null || state.totalTurnsStarted === 0) return [];
-
-  const rows: RuntimeStepRow[] = [];
-  let index = 1;
-  let globalTurn = 0;
-  const maxRun = Math.max(state.currentRun, ...state.runs.map((run) => run.index), 1);
-
-  for (let runIndex = 1; runIndex <= maxRun; runIndex++) {
-    const turns = turnsStartedForRun(state, runIndex);
-    if (runIndex > 1 && (turns > 0 || state.currentRun >= runIndex)) {
-      const active = state.active && state.currentRun === runIndex && turns === 0;
-      rows.push({ index: index++, label: `restarting loop ${runIndex}`, status: active ? "active" : "done", detail: active ? `starting loop ${runIndex}` : `loop ${runIndex} started` });
-    }
-
-    for (let turn = 1; turn <= turns; turn++) {
-      globalTurn++;
-      const score = scoreForRunTurn(state, runIndex, turn);
-      const rowGlobalTurn = score?.globalTurn ?? globalTurn;
-      const currentTurn = state.active && state.currentRun === runIndex && state.turnsStarted === turn && state.totalTurnsStarted === rowGlobalTurn;
-      const agentActive = currentTurn && state.currentTurnStartedAt !== null;
-      const reviewActive = currentTurn && !agentActive;
-
-      rows.push({ index: index++, label: "start turn", status: "done", detail: `loop ${runIndex}, turn ${turn}, total ${rowGlobalTurn}` });
-      rows.push({ index: index++, label: "agent work", status: agentActive ? "active" : "done", detail: agentActive ? "work in progress" : agentWorkDetail(state, rowGlobalTurn, score) });
-      rows.push({ index: index++, label: "review loop", status: reviewStatus(score, agentActive, reviewActive), detail: reviewDetail(score, agentActive, reviewActive) });
-    }
-  }
-
-  return rows;
-}
-
-function turnsStartedForRun(state: LoopRuntimeState, runIndex: number): number {
-  const run = state.runs.find((item) => item.index === runIndex);
-  const scoredTurns = state.results.filter((entry) => (entry.run ?? 1) === runIndex).map((entry) => entry.turn);
-  const maxScoredTurn = scoredTurns.length ? Math.max(...scoredTurns) : 0;
-  if (runIndex === state.currentRun) return Math.max(state.turnsStarted, run?.turnsStarted ?? 0, maxScoredTurn);
-  return Math.max(run?.turnsStarted ?? 0, maxScoredTurn);
-}
-
-function scoreForRunTurn(state: LoopRuntimeState, run: number, turn: number): LoopScoreEntry | undefined {
-  return state.results.find((entry) => (entry.run ?? 1) === run && entry.turn === turn);
-}
-
-function agentWorkDetail(state: LoopRuntimeState, globalTurn: number, score?: LoopScoreEntry): string {
-  const duration = state.turnDurations.find((entry) => entry.globalTurn === globalTurn);
-  if (duration) return `completed in ${formatDuration(duration.durationMs)}`;
-  if (score) return "scored";
-  return "work ended";
-}
-
-function reviewStatus(score: LoopScoreEntry | undefined, agentActive: boolean, reviewActive: boolean): RuntimeStepRow["status"] {
-  if (agentActive) return "waiting";
-  if (reviewActive) return "active";
-  return score ? "done" : "done";
-}
-
-function reviewDetail(score: LoopScoreEntry | undefined, agentActive: boolean, reviewActive: boolean): string {
-  if (score) return progressDetail(score);
-  if (agentActive) return "waiting for score_loop_result";
-  if (reviewActive) return "ready for score_loop_result";
-  return "missing score reminder";
-}
-
-function formatDuration(durationMs: number): string {
-  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  const end = Math.min(rows.length, currentIndex + nextRows + 1);
+  const window = rows.slice(start, end);
+  if (window.length <= previousRows + nextRows + 1) return window;
+  return window.slice(window.length - (previousRows + nextRows + 1));
 }
 
 function visibleRuntimeRows(rows: RuntimeStepRow[], maxRows: number): RuntimeStepRow[] {

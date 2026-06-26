@@ -10,17 +10,22 @@ It is meant for quality work where “looks done” is not enough: test improvem
 
 ## What the package installs
 
-This package registers one Pi extension:
+This package registers pi-loop plus the bundled ACE adapter resources:
 
 ```json
 {
   "pi": {
-    "extensions": ["./extensions/pi-loop/index.ts"]
+    "extensions": [
+      "./node_modules/pi-ace-adapter/dist/index.js",
+      "./extensions/pi-loop/index.ts"
+    ],
+    "skills": ["./node_modules/pi-ace-adapter/skills"],
+    "prompts": ["./node_modules/pi-ace-adapter/prompts"]
   }
 }
 ```
 
-The extension adds:
+The extensions add:
 
 | Surface | Name | Purpose |
 | --- | --- | --- |
@@ -33,7 +38,7 @@ The extension adds:
 
 ### ACE adapter dependency
 
-This branch expects the sibling checkout `~/Poetry/pi-ace-adapter` and declares it as `pi-ace-adapter: file:../pi-ace-adapter` for local development. Keep the two checkouts side by side when installing locally. Before publishing or installing from a remote, replace that file dependency with the adapter's git or registry spec; pi-loop only imports the stable `pi-ace-adapter/context` resolver and never registers the adapter extension or prompt injector.
+This branch expects the sibling checkout `~/Poetry/pi-ace-adapter` and declares it as `pi-ace-adapter: file:../pi-ace-adapter` for local development. Keep the two checkouts side by side when installing locally. Before publishing or installing from a remote, replace that file dependency with the adapter's git or registry spec. pi-loop loads the adapter extension resources from `node_modules`, imports the stable `pi-ace-adapter/context` resolver, and launches ACE through the adapter's daemon-style runner.
 
 Local development install:
 
@@ -44,8 +49,10 @@ pi install ~/src/pi-loop
 Temporary one-off run without installing:
 
 ```bash
-pi -e ~/src/pi-loop/extensions/pi-loop/index.ts
+pi -e ~/src/pi-loop
 ```
+
+Use the package directory, not only `extensions/pi-loop/index.ts`, so Pi also loads the ACE adapter extension, `/ace` commands, skills, prompts, and daemon-launch event listener.
 
 After publishing to a git remote, install with:
 
@@ -70,9 +77,27 @@ pi install -l ~/src/pi-loop
 /pi-loop toggle
 /loop off
 /loop clear
+
+/ace status
+/ace setup
+/ace import-playbook <path> [name]
+/ace use <name>
+/ace start [playbook] [--mode offline|online|eval_only]
 ```
 
 Shortcut: `Ctrl+Alt+L` toggles the floating panel without changing loop execution.
+
+## ACE general-use assets
+
+The package ships general, domain-neutral ACE assets under `ace/`:
+
+| Path | Purpose |
+| --- | --- |
+| `ace/playbooks/pi-loop-general.md` | A reusable software-engineering loop playbook for bug fixes, tests, refactors, docs/config/package work, and ACE integration work. |
+| `ace/datasets/general-loop-proof.jsonl` | ACE-shaped general loop examples with `context`, `question`, `target`, and `metadata.domain = general_engineering`. |
+| `ace/proof/verification.json` | Saved proof metadata for the local verification commands and behaviors proven by the ACE integration work. |
+
+These assets intentionally avoid single-domain prompts or task-specific evaluation commands. Import the playbook with `/ace import-playbook ace/playbooks/pi-loop-general.md default`, enable it with `/ace use default`, and use `/ace start default` to run the adapter's detached ACE bridge.
 
 Defaults:
 
@@ -105,17 +130,18 @@ Defaults:
 2. pi-loop builds a bounded context snapshot from the current working directory, package scripts, git state, changed files, and prior scored attempts.
 3. The config plus context snapshot and current Pi session id are appended to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` as a `config` entry.
 4. `score_loop_result` is activated for the session.
-5. A kickoff prompt is sent as a normal user message. It includes the context snapshot, compact ACE context when enabled, and asks the agent to analyze first, then work, then score.
-6. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules, and evidence requirements.
-7. On `agent_start`, pi-loop increments the turn counter and records how many score entries existed before the turn.
-8. The agent works with normal Pi tooling. pi-loop does not sandbox tools or prescribe the implementation path.
-9. Before claiming completion, the agent must call `score_loop_result` with structured attempt and evidence.
-10. The score tool verifies evidence, classifies the outcome, appends a progress entry to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`, updates the widget, and returns progress feedback. The first call records only the baseline.
-11. On `agent_end`, pi-loop checks whether the turn produced a score:
+5. pi-loop requests a daemon-ish ACE run through `pi-ace-adapter` when ACE storage is enabled and the selected playbook exists. The loop does not wait for ACE completion; output and metadata paths are logged.
+6. A kickoff prompt is sent as a normal user message. It includes the context snapshot, compact ACE context when enabled, and asks the agent to analyze first, then work, then score.
+7. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules, and evidence requirements.
+8. On `agent_start`, pi-loop increments the turn counter, appends a `turn_started` event, and records how many score entries existed before the turn.
+9. The agent works with normal Pi tooling. pi-loop does not sandbox tools or prescribe the implementation path.
+10. Before claiming completion, the agent must call `score_loop_result` with structured attempt and evidence.
+11. The score tool verifies evidence, classifies the outcome, appends a progress entry to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`, updates the widget, and returns progress feedback. The first call records only the baseline.
+12. On `agent_end`, pi-loop checks whether the turn produced a score:
     - if not, it schedules a missing-score prompt
     - it schedules a refined continuation prompt using tried actions, non-improvements, plateau/repeat analysis, blockers, next actions, remaining budget, and compact ACE context when enabled
     - if a safety limit is hit, it appends a stop event, sends a concise TL;DR summary with each loop step taken, disables the score tool, and clears the widget
-12. On the next event in the same Pi session, pi-loop reconstructs active state from `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` and resumes the widget/tool state when limits have not been reached. A different Pi session ignores that active loop and must start its own `/loop`.
+13. On the next event in the same Pi session, pi-loop reconstructs active state from `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` and resumes the widget/tool state when limits have not been reached. A different Pi session ignores that active loop and must start its own `/loop`.
 
 ## Input structure
 
@@ -236,7 +262,7 @@ Structured details keep internal measurement fields for persistence and automate
 ```ts
 { type: "config"; schemaVersion?: 2; goal: string; targetScore: number; maxTurns: number; maxMinutes: number; maxRuns?: number; startedAt: number; sessionId?: string; targetContext?: TargetContextSnapshot }
 { type: "score"; schemaVersion?: 2; run?: number; turn: number; globalTurn?: number; timestamp: number; summary: string; score: number; rawScore: number; targetScore: number; baselineScore?: number | null; progressPercent?: number | null; passedDefinition: boolean; improvement: number | null; blockers: unknown[]; strengths?: string[]; nextActions: string[]; categories: unknown[]; outcome?: string; verifierFindings?: unknown[]; attempt?: unknown; result?: unknown }
-{ type: "event"; schemaVersion?: 2; timestamp: number; event: "stopped" | "run_started" | "run_stopped" | "missing_score" | "premature_stop"; reason?: string; run?: number; turn?: number; globalTurn?: number }
+{ type: "event"; schemaVersion?: 2; timestamp: number; event: "stopped" | "run_started" | "run_stopped" | "turn_started" | "missing_score" | "premature_stop" | "ace_run_started" | "ace_run_completed" | "ace_run_failed" | "ace_run_skipped"; reason?: string; run?: number; turn?: number; globalTurn?: number; details?: Record<string, unknown> }
 ```
 
 ### UI output
@@ -252,6 +278,7 @@ The floating right-side panel renders at 25% terminal width and 95% terminal hei
 │tokens: <used>/<window> <percent>         │
 │progress: <baseline|+N.N% over baseline>  │
 │best: <+N.N% over baseline run n|none>    │
+│ace: <not launched|running pid n|skipped> │
 │recent: #1 9m 12s, #2 8m 03s             │
 │        #3 10m 00s, #4 2m 17s            │
 │──────── current prompt ────────          │
@@ -268,7 +295,7 @@ The floating right-side panel renders at 25% terminal width and 95% terminal hei
 ╰──────────────────────────────────────────╯
 ```
 
-The runtime step table is the live version of the “Runtime context steps” section: `/loop status` prints all 12 steps, and the panel shows all 12 steps in its expanded layout. `done` is only for completed past steps; future steps render as `next`/waiting until the active step advances. The floating panel carries loop progress while Pi's footer remains reserved for Pi status. When the loop finishes, pi-loop clears the widget and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
+The runtime step table is the live version of the core loop orchestration steps: `/loop status` prints all 12 steps, and the panel shows all 12 steps in its expanded layout. ACE launch status is shown separately in the `ace` data row and in `ace_run_*` log events because ACE runs daemon-style outside the LLM turn lifecycle. `done` is only for completed past steps; future steps render as `next`/waiting until the active step advances. The floating panel carries loop progress while Pi's footer remains reserved for Pi status. When the loop finishes, pi-loop clears the widget and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
 
 ### Sequential best-of-K runs
 

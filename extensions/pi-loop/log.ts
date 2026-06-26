@@ -61,10 +61,7 @@ function applyLogEntry(state: LoopRuntimeState, entry: LoopLogEntry, sessionId?:
     if (!state.goal) return;
     const normalized = { ...entry, run: entry.run ?? 1, globalTurn: entry.globalTurn ?? entry.turn };
     state.results.push(normalized);
-    state.currentRun = Math.max(state.currentRun, normalized.run ?? 1);
-    state.turnsStarted = Math.max(state.turnsStarted, normalized.turn);
-    state.totalTurnsStarted = Math.max(state.totalTurnsStarted, normalized.globalTurn ?? normalized.turn);
-    ensureRun(state, normalized.run ?? 1).turnsStarted = state.turnsStarted;
+    recordObservedTurn(state, normalized.run ?? 1, normalized.turn, normalized.globalTurn ?? normalized.turn);
     return;
   }
 
@@ -86,9 +83,47 @@ function applyEventEntry(state: LoopRuntimeState, entry: LoopEventEntry): void {
     run.bestScore = entry.bestScore;
     return;
   }
+  if (entry.event === "turn_started") {
+    recordObservedTurn(state, entry.run ?? state.currentRun, entry.turn ?? state.turnsStarted + 1, entry.globalTurn ?? entry.turn ?? state.totalTurnsStarted + 1);
+    return;
+  }
+  if ((entry.event === "missing_score" || entry.event === "premature_stop") && entry.turn) {
+    recordObservedTurn(state, entry.run ?? state.currentRun, entry.turn, entry.globalTurn ?? entry.turn);
+  }
   if (entry.event === "missing_score") state.unscoredConsecutiveTurns++;
   if (entry.event === "premature_stop") state.prematureStopCount++;
+  if (entry.event === "ace_run_started" || entry.event === "ace_run_completed" || entry.event === "ace_run_failed" || entry.event === "ace_run_skipped") recordAceRun(state, entry);
   if (entry.event === "stopped" || entry.event === "cleared" || entry.event === "limit_reached") state.stopReason = entry.reason ?? entry.event;
+}
+
+function recordAceRun(state: LoopRuntimeState, entry: LoopEventEntry): void {
+  const status = entry.event === "ace_run_started" ? "running" : entry.event === "ace_run_completed" ? "completed" : entry.event === "ace_run_failed" ? "failed" : "skipped";
+  const details = entry.details ?? {};
+  const mode = details.mode === "online" || details.mode === "eval_only" ? details.mode : "offline";
+  state.aceRun = {
+    status,
+    mode,
+    startedAt: typeof details.startedAt === "number" ? details.startedAt : entry.timestamp,
+    completedAt: status === "running" ? undefined : entry.timestamp,
+    message: entry.reason,
+    pid: typeof details.pid === "number" ? details.pid : undefined,
+    outputDir: typeof details.outputDir === "string" ? details.outputDir : undefined,
+    metadataPath: typeof details.metadataPath === "string" ? details.metadataPath : undefined,
+    stdoutPath: typeof details.stdoutPath === "string" ? details.stdoutPath : undefined,
+    stderrPath: typeof details.stderrPath === "string" ? details.stderrPath : undefined,
+    candidatePath: typeof details.candidatePath === "string" ? details.candidatePath : undefined,
+    sampleCount: typeof details.sampleCount === "number" ? details.sampleCount : undefined,
+    validationScore: typeof details.validationScore === "number" ? details.validationScore : undefined,
+    code: typeof details.code === "number" ? details.code : undefined,
+  };
+}
+
+function recordObservedTurn(state: LoopRuntimeState, runIndex: number, turn: number, globalTurn: number): void {
+  state.currentRun = Math.max(state.currentRun, runIndex);
+  state.turnsStarted = Math.max(state.turnsStarted, turn);
+  state.totalTurnsStarted = Math.max(state.totalTurnsStarted, globalTurn);
+  const run = ensureRun(state, runIndex);
+  run.turnsStarted = Math.max(run.turnsStarted, turn);
 }
 
 function ensureRun(state: LoopRuntimeState, index: number) {

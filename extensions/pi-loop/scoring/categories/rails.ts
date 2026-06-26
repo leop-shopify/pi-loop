@@ -10,7 +10,8 @@ export function scoreRails(input: LoopScoreInput): CategoryScore {
   const railsArtifacts = hasRailsArtifacts(input);
 
   if (rails?.relevant === false && !railsArtifacts) return buildCategory("rails", CATEGORY_MAX.rails, ["Rails engineering is not relevant for this turn."], gaps);
-  if (!rails) return buildCategory("rails", railsArtifacts ? 3 : 8, evidence, [railsArtifacts ? "Rails artifacts were touched but Rails evidence was not provided." : "Rails relevance was not stated."]);
+  if (!rails && !railsArtifacts) return buildCategory("rails", CATEGORY_MAX.rails, ["Rails engineering is not relevant for this turn."], gaps);
+  if (!rails) return buildCategory("rails", 3, evidence, ["Rails artifacts were touched but Rails evidence was not provided."]);
   if (rails.relevant === false && railsArtifacts) return buildCategory("rails", 3, evidence, ["Rails artifacts were touched but Rails evidence marked Rails irrelevant."]);
 
   const dataConstraints = rails.dataConstraintsCovered ?? rails.dbConstraintsOrValidations;

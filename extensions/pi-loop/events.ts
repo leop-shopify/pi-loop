@@ -27,12 +27,14 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     const state = controller.getState(ctx);
     if (!state.active) return;
     controller.cancelPendingResume(state);
+    const startedAt = Date.now();
     state.turnsStarted++;
     state.totalTurnsStarted++;
-    state.currentTurnStartedAt = Date.now();
+    state.currentTurnStartedAt = startedAt;
     state.lastAgentStartScoreCount = state.results.length;
     const run = state.runs.find((item) => item.index === state.currentRun);
     if (run) run.turnsStarted = state.turnsStarted;
+    appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "turn_started", timestamp: startedAt, run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted });
     captureContextUsage(ctx, state);
     updateLoopWidget(ctx, state);
     sendLoopStepMessage(pi, state, "starting agent work", loopTurnDetail(state));

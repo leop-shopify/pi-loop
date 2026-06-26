@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { Key } from "@earendil-works/pi-tui";
 
 import { buildAceLoopContext } from "./ace-context.ts";
+import { launchAceForLoop } from "./ace-launch.ts";
 import { MAX_TOTAL_TURNS } from "./constants.ts";
 import { loopHelp, parseLoopArgs, statusText } from "./commands.ts";
 import { totalTurnBudgetExceeded } from "./run-manager.ts";
@@ -81,6 +82,7 @@ export function registerLoopCommand(pi: ExtensionAPI, controller: LoopController
       sendLoopStepMessage(pi, state, "starting loop", `run ${state.currentRun}/${state.maxRuns}, ${state.maxTurns} attempts max`);
       ctx.ui.notify(`pi-loop started: ${parsed.minutes} minutes, ${parsed.turns} turns per run, ${parsed.runs} run(s); first score_loop_result call records the baseline`, "info");
       const aceContext = await buildAceLoopContext(ctx);
+      launchAceForLoop(pi, ctx, state, aceContext);
       sendLoopStepMessage(pi, state, "kickoff prompt", "sent initial loop instructions");
       controller.sendWhenReady(kickoffPrompt(state, { aceContext }), ctx);
     },
@@ -112,5 +114,6 @@ function clearLoop(state: Parameters<typeof stopLoop>[0]): void {
   state.lastTurnDurationMs = null;
   state.turnDurations = [];
   state.contextUsage = null;
+  state.aceRun = null;
   state.stopReason = "cleared by user";
 }

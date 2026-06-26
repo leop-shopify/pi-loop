@@ -83,3 +83,15 @@ test("docs-only change does not require review gates", () => {
 
   assert.ok(result.categories.some((category) => category.key === "reviewGates" && category.score === category.max));
 });
+
+test("non-Rails work is not penalized for omitted Rails evidence", () => {
+  const result = scoreLoopResult({
+    ...strongInput,
+    rails: undefined,
+    artifacts: [{ path: "src/worker.ts", purpose: "background worker", evidence: "bounded retry behavior", kind: "source" }],
+  });
+  const railsCategory = result.categories.find((category) => category.key === "rails");
+
+  assert.equal(railsCategory?.score, railsCategory?.max);
+  assert.deepEqual(railsCategory?.gaps, []);
+});

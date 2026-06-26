@@ -61,16 +61,20 @@ test("loop process treats scores as feedback and stops only at the configured li
     assert.ok(pi.stepMessages.some((message) => /Step: feedback — \+/.test(message.content)));
 
     const entries = readLogEntries(dir);
-    assert.deepEqual(entries.map((entry) => entry.type), ["config", "score", "score", "event"]);
+    assert.deepEqual(entries.map((entry) => entry.type), ["config", "event", "score", "event", "score", "event"]);
     assert.equal(entries[0].sessionId, "test-session");
     assert.equal(entries[0].targetContext.baseline.packageManager, "pnpm");
-    assert.equal(entries[1].outcome, "needs_iteration");
-    assert.equal(entries[1].run, 1);
+    assert.equal(entries[1].event, "turn_started");
     assert.equal(entries[1].globalTurn, 1);
-    assert.equal(entries[1].attempt.stopIntent, "claim_done");
-    assert.equal(entries[2].outcome, "successful_improvement");
-    assert.equal(entries[2].improvement > 0, true);
-    assert.match(entries[3].reason, /all runs exhausted/);
+    assert.equal(entries[2].outcome, "needs_iteration");
+    assert.equal(entries[2].run, 1);
+    assert.equal(entries[2].globalTurn, 1);
+    assert.equal(entries[2].attempt.stopIntent, "claim_done");
+    assert.equal(entries[3].event, "turn_started");
+    assert.equal(entries[3].globalTurn, 2);
+    assert.equal(entries[4].outcome, "successful_improvement");
+    assert.equal(entries[4].improvement > 0, true);
+    assert.match(entries[5].reason, /all runs exhausted/);
 
     const finalMessage = pi.sentMessages.at(-1).text;
     assert.match(finalMessage, /pi-loop finished/);
@@ -142,9 +146,10 @@ test("multi-run process advances after a failed run and stops when all runs are 
     await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Continuing" }] }, ctx);
 
     let entries = readLogEntries(dir);
-    assert.deepEqual(entries.map((entry) => entry.type), ["config", "score", "event", "event"]);
-    assert.equal(entries[2].event, "run_stopped");
-    assert.equal(entries[3].event, "run_started");
+    assert.deepEqual(entries.map((entry) => entry.type), ["config", "event", "score", "event", "event"]);
+    assert.equal(entries[1].event, "turn_started");
+    assert.equal(entries[3].event, "run_stopped");
+    assert.equal(entries[4].event, "run_started");
     assert.ok(pi.activeTools.includes("score_loop_result"));
     assert.ok(pi.stepMessages.some((message) => message.content === "Step: restarting loop 2 — run 2/2"));
 

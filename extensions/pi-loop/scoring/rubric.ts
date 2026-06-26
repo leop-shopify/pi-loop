@@ -70,7 +70,7 @@ export function scoringRubricSummary(): string {
   return [
     "Loop progress is shown as percent improvement over the first scored turn; internal measurements are not the user-facing result.",
     "Loop stop rule: score_loop_result provides feedback only; the loop keeps exploring until configured time/turn/run limits, user stop, or repeated missing scorer calls.",
-    "Internal evidence categories: correctness, testing quality, design/SOLID, Rails engineering, verification/gates, automated review gates, and operability.",
+    "Internal evidence categories: correctness, testing quality, design/SOLID, framework-specific/Rails engineering when relevant, verification/gates, automated review gates, and operability.",
     "Tests must assert externally visible behavior and cover the changed code or target bug.",
     "Mocking owned code, mock-only tests, implementation-coupled tests, and flaky sleep-based tests block high scores.",
     "Verification must include passed test or coverage check entries with command, scope, evidence, and successful exit status for executable changes.",

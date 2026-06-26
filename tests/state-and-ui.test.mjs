@@ -87,6 +87,48 @@ test("state reconstructs config and score entries from the log", () => {
   });
 });
 
+test("state reconstructs started turns before a score is recorded", () => {
+  withTempDir((dir) => {
+    const state = createLoopState();
+    appendLogEntry(dir, startLoopState(state, {
+      goal: "preserve turn counters",
+      targetScore: 90,
+      maxTurns: 12,
+      maxMinutes: 10,
+      startedAt: Date.now(),
+    }));
+    appendLogEntry(dir, { type: "event", schemaVersion: 2, event: "turn_started", timestamp: Date.now(), run: 1, turn: 1, globalTurn: 1 });
+
+    const reconstructed = reconstructLoopState(dir);
+
+    assert.equal(reconstructed.turnsStarted, 1);
+    assert.equal(reconstructed.totalTurnsStarted, 1);
+    assert.equal(reconstructed.runs[0].turnsStarted, 1);
+    assert.equal(runtimeStepRows(reconstructed).find((step) => step.label === "start turn").status, "done");
+  });
+});
+
+test("state reconstructs historical missing-score turn counters", () => {
+  withTempDir((dir) => {
+    const state = createLoopState();
+    appendLogEntry(dir, startLoopState(state, {
+      goal: "preserve missing-score counters",
+      targetScore: 90,
+      maxTurns: 12,
+      maxMinutes: 10,
+      startedAt: Date.now(),
+    }));
+    appendLogEntry(dir, { type: "event", schemaVersion: 2, event: "missing_score", timestamp: Date.now(), run: 1, turn: 2, globalTurn: 2, reason: "score tool was not called" });
+
+    const reconstructed = reconstructLoopState(dir);
+
+    assert.equal(reconstructed.turnsStarted, 2);
+    assert.equal(reconstructed.totalTurnsStarted, 2);
+    assert.equal(reconstructed.runs[0].turnsStarted, 2);
+    assert.equal(reconstructed.unscoredConsecutiveTurns, 1);
+  });
+});
+
 test("state reconstruction does not share active loops across Pi sessions", () => {
   withTempDir((dir) => {
     const state = createLoopState();
@@ -322,7 +364,7 @@ test("runtime steps expose only one active step and defer measure progress until
   const afterWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
   assert.deepEqual(afterWork.filter((step) => step.status === "active").map((step) => step.label), ["measure progress"]);
   assert.equal(afterWorkCurrentLines.length, 1);
-  assert.match(afterWorkCurrentLines[0], /review loop/);
+  assert.match(afterWorkCurrentLines[0], /measure progress/);
 });
 
 test("stale current-turn score cannot override active agent work", () => {
@@ -376,7 +418,7 @@ test("prior scores do not make resume-or-stop active during later agent work", (
   assert.deepEqual(afterWork.filter((step) => step.status === "active").map((step) => step.label), ["measure progress"]);
   assert.equal(afterWork.find((step) => step.label === "resume or stop").status, "waiting");
   assert.equal(afterWorkCurrentLines.length, 1);
-  assert.match(afterWorkCurrentLines[0], /review loop/);
+  assert.match(afterWorkCurrentLines[0], /measure progress/);
 });
 
 test("loop widget shows the full runtime step history in the expanded panel", () => {
@@ -395,10 +437,10 @@ test("loop widget shows the full runtime step history in the expanded panel", ()
   const narrowLines = renderLoopWidget(state, 40, plainTheme);
   const historyLines = narrowLines.filter((line) => /[>. ]\s*\d{2}\s+(done|now|next)\b/.test(line));
 
-  assert.equal(historyLines.length, 3);
+  assert.equal(historyLines.length, 12);
   assert.match(narrowLines.join("\n"), /start turn/);
   assert.match(narrowLines.join("\n"), /agent work/);
-  assert.match(narrowLines.join("\n"), /> 03 now\s+review loop/);
+  assert.match(narrowLines.join("\n"), /> 11 now\s+resume or stop/);
   assert.equal(narrowLines.every((line) => visibleWidth(line) <= 40), true);
 });
 

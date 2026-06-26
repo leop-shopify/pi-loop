@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -45,29 +45,86 @@ test("ACE loop context fails closed when disabled or malformed", async () => {
   });
 });
 
-test("/loop kickoff includes ACE context and short capped defaults", async () => {
-  await withTempDir(async (dir) => {
-    writeProject(dir);
-    writeAceStorage(dir, { playbook: "Start with the smallest testable behavior slice." });
+test("/loop kickoff includes ACE context, registers /ace commands, and requests ACE launch", async () => {
+  await withEnv("PI_ACE_ADAPTER_DAEMON_DRY_RUN", "1", async () => {
+    await withTempDir(async (dir) => {
+      writeProject(dir);
+      writeAceStorage(dir, { playbook: "Start with the smallest testable behavior slice." });
 
-    const pi = mockPi();
-    const ctx = mockContext(dir, pi);
-    piLoopExtension(pi);
+      const pi = mockPi();
+      const ctx = mockContext(dir, pi);
+      piLoopExtension(pi);
 
-    await pi.commands.get("loop").handler("Improve source.ts --minutes=90", ctx);
+      await pi.commands.get("loop").handler("Improve source.ts --minutes=90", ctx);
 
-    assert.match(pi.sentMessages[0].text, /## ACE Playbook Context/);
-    assert.match(pi.sentMessages[0].text, /smallest testable behavior slice/);
-    assert.match(pi.notifications[0].message, /pi-loop started: 10 minutes, 12 turns per run/);
-    assert.deepEqual(pi.stepMessages.map((message) => message.content), [
-      "Step: starting loop — run 1/1, 12 attempts max",
-      "Step: kickoff prompt — sent initial loop instructions",
-    ]);
+      assert.match(pi.sentMessages[0].text, /## ACE Playbook Context/);
+      assert.match(pi.sentMessages[0].text, /smallest testable behavior slice/);
+      assert.match(pi.notifications[0].message, /pi-loop started: 10 minutes, 12 turns per run/);
+      assert.deepEqual(pi.stepMessages.slice(0, 4).map((message) => message.content), [
+        "Step: starting loop — run 1/1, 12 attempts max",
+        "Step: launching ACE — mode offline",
+        "Step: ACE launched — ACE daemon-ish run launched with pid 0. output: /tmp/ace/runs/test metadata: /tmp/ace/runs/test/metadata.json",
+        "Step: kickoff prompt — sent initial loop instructions",
+      ]);
 
-    const [config] = readLogEntries(dir);
-    assert.equal(config.maxMinutes, 10);
-    assert.equal(config.maxTurns, 12);
+      const [config] = readLogEntries(dir);
+      assert.equal(config.maxMinutes, 10);
+      assert.equal(config.maxTurns, 12);
+    });
   });
+});
+
+test("bundled adapter dist registers /ace command and daemon listener", async () => {
+  const { default: registerAdapter } = await import("../node_modules/pi-ace-adapter/dist/index.js");
+  const commands = new Map();
+  const listeners = [];
+  const pi = {
+    registerCommand(name, command) { commands.set(name, command); },
+    on(channel, handler) {
+      listeners.push({ channel, handler });
+      return () => {};
+    },
+    events: {
+      on(channel, handler) {
+        listeners.push({ channel, handler });
+        return () => {};
+      },
+    },
+  };
+
+  registerAdapter(pi);
+
+  assert.ok(commands.has("ace"));
+  assert.match(commands.get("ace").description, /status\|setup\|import-playbook\|use\|off\|feedback\|start\|train\|export-playbook/);
+  assert.ok(listeners.some((listener) => listener.channel === "pi-ace-adapter:launch-daemon"));
+});
+
+test("package manifest loads pi-ace-adapter resources and ships ACE proof assets", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+
+  assert.ok(manifest.pi.extensions.includes("./node_modules/pi-ace-adapter/dist/index.js"));
+  assert.ok(manifest.pi.extensions.includes("./extensions/pi-loop/index.ts"));
+  assert.ok(manifest.pi.skills.includes("./node_modules/pi-ace-adapter/skills"));
+  assert.ok(manifest.pi.prompts.includes("./node_modules/pi-ace-adapter/prompts"));
+  assert.ok(manifest.files.includes("ace"));
+});
+
+test("general ACE playbook and proof dataset are domain-neutral", () => {
+  const playbook = readFileSync(new URL("../ace/playbooks/pi-loop-general.md", import.meta.url), "utf8");
+  const dataset = readFileSync(new URL("../ace/datasets/general-loop-proof.jsonl", import.meta.url), "utf8");
+  const proof = JSON.parse(readFileSync(new URL("../ace/proof/verification.json", import.meta.url), "utf8"));
+  const disallowedDomain = ["fin", "ance"].join("");
+  const forbiddenDomain = new RegExp(`${disallowedDomain}|eval\\.${disallowedDomain}|${disallowedDomain}\\.run`, "i");
+
+  assert.doesNotMatch(playbook, forbiddenDomain);
+  assert.doesNotMatch(dataset, forbiddenDomain);
+  assert.equal(proof.domain, "general_engineering");
+  assert.equal(proof.singleDomainBenchmarkSpecific, false);
+
+  const rows = dataset.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(rows.length >= 5, true);
+  assert.equal(rows.every((row) => row.metadata?.domain === "general_engineering"), true);
+  assert.equal(rows.every((row) => row.context && row.question && row.target), true);
 });
 
 test("scheduled continuation prompts are ACE enriched when enabled", async () => {
@@ -96,6 +153,17 @@ test("scheduled continuation prompts are ACE enriched when enabled", async () =>
   });
 });
 
+async function withEnv(name, value, fn) {
+  const previous = process.env[name];
+  process.env[name] = value;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+}
+
 function writeProject(dir) {
   writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "node --test", typecheck: "tsc --noEmit" } }));
   writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
@@ -114,7 +182,7 @@ function mockPi() {
   return {
     commands: new Map(),
     tools: new Map(),
-    events: new Map(),
+    events: mockPiEvents(),
     activeTools: [],
     sentMessages: [],
     stepMessages: [],
@@ -129,6 +197,25 @@ function mockPi() {
     sendMessage(message, options) { this.stepMessages.push({ ...message, options }); },
     sendUserMessage(text, options) { this.sentMessages.push({ text, options }); },
   };
+}
+
+function mockPiEvents() {
+  const events = new Map();
+  const bus = new Map();
+  events.on = (channel, handler) => {
+    const handlers = bus.get(channel) ?? [];
+    handlers.push(handler);
+    bus.set(channel, handlers);
+    return () => bus.set(channel, (bus.get(channel) ?? []).filter((item) => item !== handler));
+  };
+  events.emit = (channel, data) => {
+    if (channel === "pi-ace-adapter:launch-daemon") {
+      data.onResult({ status: "launched", mode: "offline", storageRoot: "/tmp/ace", storageScope: "project", selectedPlaybook: "default", pid: 0, outputDir: "/tmp/ace/runs/test", metadataPath: "/tmp/ace/runs/test/metadata.json", stdoutPath: "/tmp/ace/runs/test/stdout.log", stderrPath: "/tmp/ace/runs/test/stderr.log" });
+      return;
+    }
+    for (const handler of bus.get(channel) ?? []) handler(data);
+  };
+  return events;
 }
 
 function mockContext(cwd, pi = mockPi()) {

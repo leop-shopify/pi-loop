@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-06-26",
+  "scope": "pi-loop plus pi-ace-adapter ACE integration for general software-engineering loop use cases",
+  "domain": "general_engineering",
+  "singleDomainBenchmarkSpecific": false,
+  "commands": [
+    {
+      "command": "corepack pnpm@10.28.0 test",
+      "cwd": "/Users/leonardopereira/Poetry/pi-loop",
+      "status": "passed",
+      "evidence": "93/93 node --test checks passed, including ACE command/resource loading from built adapter dist, daemon-launch event handoff, packaged proof assets, domain-neutral dataset/playbook checks, and no Rails penalty for non-Rails work."
+    },
+    {
+      "command": "corepack pnpm@10.28.0 run typecheck",
+      "cwd": "/Users/leonardopereira/Poetry/pi-loop",
+      "status": "passed",
+      "evidence": "TypeScript no-emit check passed for pi-loop."
+    },
+    {
+      "command": "corepack pnpm@10.28.0 run smoke",
+      "cwd": "/Users/leonardopereira/Poetry/pi-loop",
+      "status": "passed",
+      "evidence": "pi-loop smoke extension check completed successfully."
+    },
+    {
+      "command": "corepack pnpm@10.28.0 pack --dry-run",
+      "cwd": "/Users/leonardopereira/Poetry/pi-loop",
+      "status": "passed",
+      "evidence": "Dry-run package contents include ace/datasets/general-loop-proof.jsonl, ace/playbooks/pi-loop-general.md, ace/proof/verification.json, and pi-loop extension files."
+    },
+    {
+      "command": "node --experimental-strip-types -e \"import('./node_modules/pi-ace-adapter/dist/index.js')\"",
+      "cwd": "/Users/leonardopereira/Poetry/pi-loop",
+      "status": "passed",
+      "evidence": "The adapter extension entrypoint used by pi-loop loads from built JavaScript under node_modules instead of TypeScript source."
+    },
+    {
+      "command": "corepack pnpm@10.28.0 run build",
+      "cwd": "/Users/leonardopereira/Poetry/pi-ace-adapter",
+      "status": "passed",
+      "evidence": "pi-ace-adapter compiled TypeScript source into dist/*.js and dist/*.d.ts entrypoints."
+    },
+    {
+      "command": "corepack pnpm@10.28.0 run typecheck",
+      "cwd": "/Users/leonardopereira/Poetry/pi-ace-adapter",
+      "status": "passed",
+      "evidence": "TypeScript no-emit check passed for pi-ace-adapter daemon runner, event listener, and /ace start command."
+    },
+    {
+      "command": "corepack pnpm@10.28.0 run smoke",
+      "cwd": "/Users/leonardopereira/Poetry/pi-ace-adapter",
+      "status": "passed",
+      "evidence": "Direct command-handler smoke covers import/use/off, feedback redaction, /ace start dry-run daemon launch, and offline training through a fake ACE module."
+    },
+    {
+      "command": "corepack pnpm@10.28.0 pack --dry-run",
+      "cwd": "/Users/leonardopereira/Poetry/pi-ace-adapter",
+      "status": "passed",
+      "evidence": "Dry-run package contents include dist JS/declaration files, prompts, skills, scripts/run_pi_ace.py, smoke scripts, source files, and build tsconfig."
+    },
+    {
+      "command": "if rg -n <single-domain benchmark patterns> /Users/leonardopereira/Poetry/pi-loop /Users/leonardopereira/Poetry/pi-ace-adapter; then exit 1; else exit 0; fi",
+      "cwd": "/Users/leonardopereira/Poetry/pi-loop",
+      "status": "passed",
+      "evidence": "No matching single-domain benchmark references were found in pi-loop or pi-ace-adapter."
+    }
+  ],
+  "provedBehaviors": [
+    "pi-loop package manifest loads pi-ace-adapter built JS extension plus skill and prompt resources.",
+    "pi-loop kickoff can request a daemon-style ACE launch through the adapter event bus when ACE context is enabled.",
+    "ACE launch state records pid, output, metadata, stdout, and stderr paths for later inspection.",
+    "The included playbook and dataset are general engineering assets and contain no single-domain assumptions."
+  ],
+  "knownLimitations": [
+    "Detached ACE process completion is inspected through the run metadata/log files rather than reconciled live into pi-loop after process exit.",
+    "Adapter CLI smoke coverage for command execution depends on Pi print-mode slash-command behavior and is not used as release proof in this record."
+  ]
+}

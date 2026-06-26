@@ -20,10 +20,18 @@
   "packageManager": "pnpm@10.28.0",
   "pi": {
     "extensions": [
+      "./node_modules/pi-ace-adapter/dist/index.js",
       "./extensions/pi-loop/index.ts"
+    ],
+    "skills": [
+      "./node_modules/pi-ace-adapter/skills"
+    ],
+    "prompts": [
+      "./node_modules/pi-ace-adapter/prompts"
     ]
   },
   "files": [
+    "ace",
     "extensions",
     "README.md",
     "package.json"
