@@ -34,16 +34,17 @@ export function runtimeStepRows(state: LoopRuntimeState): RuntimeStepRow[] {
   return finalizeRuntimeRows([
     row(1, "parse config", hasConfig, state.active, configDetail(state)),
     row(2, "capture context", hasContext, state.active && !hasTurn, contextDetail(state)),
-    row(3, "persist log", hasConfig, state.active, "~/.pi/agent/pi-loop/projects/.../log.jsonl config entry"),
-    row(4, "enable scorer", hasConfig, state.active, state.active ? "score_loop_result available" : "score_loop_result disabled"),
-    row(5, "kickoff prompt", hasConfig, state.active && !hasTurn, "analysis, files, acceptance criteria, verification"),
-    row(6, "inject guardrails", hasTurn, state.active && hasTurn, "goal, limits, hard rules, required evidence"),
-    row(7, "start turn", hasTurn, state.active && hasTurn, `turn ${state.turnsStarted}/${state.maxTurns}, total ${state.totalTurnsStarted}`),
-    row(8, "agent work", agentWorkComplete, agentWorkActive, currentTurnScored ? "scored" : measureProgressActive ? "ready for score_loop_result" : agentWorkComplete ? "work ended" : "work in progress"),
-    row(9, "measure progress", currentTurnScored, measureProgressActive, currentTurnScored && last ? progressDetail(last) : "waiting for score_loop_result"),
-    row(10, "feedback", hasScore, state.active && hasScore, feedbackDetail(state)),
-    row(11, "resume or stop", done, resumeOrStopActive, state.stopReason ?? "feedback, budget, and stop-limit check"),
-    row(12, "reconstruct", hasConfig, false, "state can resume from the log"),
+    row(3, "research gate", hasContext, state.active && !hasTurn, "optional 30m only when first request needs missing data"),
+    row(4, "persist log", hasConfig, state.active, "~/.pi/agent/pi-loop/projects/.../log.jsonl config entry"),
+    row(5, "enable scorer", hasConfig, state.active, state.active ? "score_loop_result available" : "score_loop_result disabled"),
+    row(6, "kickoff prompt", hasConfig, state.active && !hasTurn, "analysis, files, acceptance criteria, verification"),
+    row(7, "inject guardrails", hasTurn, state.active && hasTurn, "goal, limits, hard rules, required evidence"),
+    row(8, "start turn", hasTurn, state.active && hasTurn, `turn ${state.turnsStarted}/${state.maxTurns}, total ${state.totalTurnsStarted}`),
+    row(9, "agent work", agentWorkComplete, agentWorkActive, currentTurnScored ? "scored" : measureProgressActive ? "ready for score_loop_result" : agentWorkComplete ? "work ended" : "work in progress"),
+    row(10, "measure progress", currentTurnScored, measureProgressActive, currentTurnScored && last ? progressDetail(last) : "waiting for score_loop_result"),
+    row(11, "feedback", hasScore, state.active && hasScore, feedbackDetail(state)),
+    row(12, "resume or stop", done, resumeOrStopActive, state.stopReason ?? "feedback, budget, and stop-limit check"),
+    row(13, "reconstruct", hasConfig, false, "state can resume from the log"),
   ], state.active);
 }
 

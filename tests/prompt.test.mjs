@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { continuePrompt, systemPromptAddon } from "../extensions/pi-loop/prompt.ts";
+import { continuePrompt, kickoffPrompt, systemPromptAddon } from "../extensions/pi-loop/prompt.ts";
 
 test("continue prompt includes score, blockers, next actions, and budget", () => {
   const prompt = continuePrompt(loopState({
@@ -79,11 +79,21 @@ test("continue prompt includes ACE context when provided", () => {
   assert.match(prompt, /verify one slice, score it, and carry unfinished work into the next scored attempt\./);
 });
 
-test("system prompt advertises short capped defaults", () => {
+test("kickoff prompt includes the complexity-gated initial research exception", () => {
+  const prompt = kickoffPrompt(loopState());
+
+  assert.match(prompt, /Initial request complexity gate/);
+  assert.match(prompt, /post-capture-context research step with a 30-minute budget/);
+  assert.match(prompt, /Do not use this as a default excuse to spend time or tokens/);
+});
+
+test("system prompt advertises short capped defaults and the research gate exception", () => {
   const prompt = systemPromptAddon(loopState({ maxMinutes: 10, maxTurns: 12 }));
 
   assert.match(prompt, /Defaults are 10 minutes, 12 turns, and 1 run/);
   assert.match(prompt, /minutes are capped at 10/);
+  assert.match(prompt, /Initial request complexity gate/);
+  assert.match(prompt, /except for a justified initial research gate/);
 });
 
 test("continue prompt includes plateau analysis from feedback history", () => {

@@ -316,8 +316,9 @@ test("loop status reports the README runtime steps", () => {
 
   assert.match(text, /Runtime steps:/);
   assert.match(text, /01\. done\s+parse config/);
-  assert.match(text, /09\. active\s+measure progress/);
-  assert.match(text, /12\. waiting\s+reconstruct/);
+  assert.match(text, /03\. waiting\s+research gate/);
+  assert.match(text, /10\. active\s+measure progress/);
+  assert.match(text, /13\. waiting\s+reconstruct/);
 });
 
 test("runtime steps never mark future steps done while a loop is active", () => {
@@ -386,7 +387,7 @@ test("stale current-turn score cannot override active agent work", () => {
 
   assert.deepEqual(rows.filter((step) => step.status === "active").map((step) => step.label), ["agent work"]);
   assert.equal(rows.find((step) => step.label === "resume or stop").status, "waiting");
-  assert.match(historyText, /> 08 now\s+agent work/);
+  assert.match(historyText, /> 09 now\s+agent work/);
   assert.doesNotMatch(historyText, /> .*resume or stop/);
 });
 
@@ -437,10 +438,10 @@ test("loop widget shows the full runtime step history in the expanded panel", ()
   const narrowLines = renderLoopWidget(state, 40, plainTheme);
   const historyLines = narrowLines.filter((line) => /[>. ]\s*\d{2}\s+(done|now|next)\b/.test(line));
 
-  assert.equal(historyLines.length, 12);
+  assert.equal(historyLines.length, 13);
   assert.match(narrowLines.join("\n"), /start turn/);
   assert.match(narrowLines.join("\n"), /agent work/);
-  assert.match(narrowLines.join("\n"), /> 11 now\s+resume or stop/);
+  assert.match(narrowLines.join("\n"), /> 12 now\s+resume or stop/);
   assert.equal(narrowLines.every((line) => visibleWidth(line) <= 40), true);
 });
 
