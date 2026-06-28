@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { continuePrompt, kickoffPrompt, missingScorePrompt, nextRunPrompt, systemPromptAddon } from "../extensions/pi-loop/prompt.ts";
+import { continuePrompt, delegationPendingPrompt, kickoffPrompt, missingScorePrompt, nextRunPrompt, systemPromptAddon } from "../extensions/pi-loop/prompt.ts";
 
 test("continue prompt includes score, blockers, next actions, and budget", () => {
   const prompt = continuePrompt(loopState({
@@ -27,15 +27,33 @@ test("continue prompt includes score, blockers, next actions, and budget", () =>
   }));
 
   assert.match(prompt, /Last progress: \+20\.0% over baseline\./);
-  assert.match(prompt, /Blockers from scorer:\n- blocker: Missing passed test check/);
-  assert.match(prompt, /Next actions from scorer:\n- Verification: add a passed test check/);
+  assert.match(prompt, /Blockers from feedback scorer:\n- blocker: Missing passed test check/);
+  assert.match(prompt, /Next actions from feedback scorer:\n- Verification: add a passed test check/);
   assert.match(prompt, /Progress trend: r1t2:\+20\.0%/);
   assert.match(prompt, /Budget: run 1\/1, turn 3\/5, total turns 2\/5, 30 minute capped timebox/);
   assert.match(prompt, /Bounded research\/delegation rule/);
-  assert.match(prompt, /pi-loop cannot interrupt child agents for you/);
+  assert.match(prompt, /prefer several small read-only research\/review lanes over one broad/);
   assert.match(prompt, /What was tried: inspected scorer; ran partial checks/);
   assert.match(prompt, /What did not improve enough:/);
-  assert.match(prompt, /Strategy rule: use ACE context and scorer feedback/);
+  assert.match(prompt, /Strategy rule: use ACE context and feedback-scoring output/);
+});
+
+test("continue prompt turns review-gate failures into bounded review guidance", () => {
+  const prompt = continuePrompt(loopState({
+    totalTurnsStarted: 2,
+    turnsStarted: 2,
+    results: [scoreEntry({
+      outcome: "review_gate_failed",
+      blockers: [{ severity: "blocker", message: "Required review gate failed: ci." }],
+      categories: [{ key: "reviewGates", label: "Automated review gates", score: 0, max: 10, gaps: ["No full CI or merge-blocking gate evidence was provided."] }],
+    })],
+  }));
+
+  assert.match(prompt, /Review gate recovery:/);
+  assert.match(prompt, /Gate blocker: Required review gate failed: ci\./);
+  assert.match(prompt, /Gate gap: No full CI or merge-blocking gate evidence was provided\./);
+  assert.match(prompt, /passed CI, required, or merge-blocking review gate/);
+  assert.match(prompt, /bounded read-only review lane with the failed or missing gate, exact files\/checks/);
 });
 
 test("continue prompt calls out repeated progress as plateau and rejects heuristic satisfaction", () => {
@@ -48,7 +66,7 @@ test("continue prompt calls out repeated progress as plateau and rejects heurist
   assert.match(prompt, /Plateau\/repeat signal: progress repeated the previous value \(\+50\.0% over baseline\)/);
   assert.match(prompt, /score did not improve over the previous attempt \(80 <= 80\)/);
   assert.match(prompt, /score did not beat the best prior attempt \(80 <= 80\)/);
-  assert.match(prompt, /The next score must show new evidence or explain the blocker; repeated progress is not acceptance/);
+  assert.match(prompt, /The next feedback checkpoint must show new evidence or explain the blocker; repeated progress is not acceptance/);
   assert.match(prompt, /Progress is feedback only/);
 });
 
@@ -65,7 +83,7 @@ test("continue prompt rewrites stale stop-on-progress scorer actions", () => {
     })],
   }));
 
-  assert.match(prompt, /Next actions from scorer:\n- Treat baseline progress as feedback only; choose a materially different next action and score again\./);
+  assert.match(prompt, /Next actions from feedback scorer:\n- Treat baseline progress as feedback only; choose a materially different next action and score again\./);
   assert.doesNotMatch(prompt, /verify percent improvement before stopping/);
 });
 
@@ -78,7 +96,7 @@ test("continue prompt includes ACE context when provided", () => {
 
   assert.match(prompt, /## ACE Loop Context/);
   assert.match(prompt, /Prefer short verifiable slices\./);
-  assert.match(prompt, /verify one slice, score it, and carry unfinished work or partial research into the next scored attempt\./);
+  assert.match(prompt, /verify one slice, record loop_feedback, and carry unfinished work or partial research into the next feedback attempt\./);
 });
 
 test("kickoff prompt includes bounded spawned-agent research guidance", () => {
@@ -86,8 +104,9 @@ test("kickoff prompt includes bounded spawned-agent research guidance", () => {
 
   assert.match(prompt, /Bounded research\/delegation rule/);
   assert.match(prompt, /spawned research agents are allowed and valuable/);
+  assert.match(prompt, /delegation itself is not progress evidence/);
+  assert.match(prompt, /prefer several small read-only research\/review lanes over one broad/);
   assert.match(prompt, /explicit report deadline before timeout/);
-  assert.match(prompt, /Score available findings instead of waiting longer/);
 });
 
 test("system prompt advertises short capped defaults and bounded spawned-agent pacing", () => {
@@ -97,21 +116,45 @@ test("system prompt advertises short capped defaults and bounded spawned-agent p
   assert.match(prompt, /minutes are capped at 10/);
   assert.match(prompt, /pi-loop cannot interrupt child agents for you/);
   assert.match(prompt, /spawned agents and data collection are useful but stay inside that cap/);
+  assert.match(prompt, /delegation itself is not progress evidence/);
 });
 
-test("missing score prompt requests available spawned-agent evidence instead of waiting", () => {
+test("missing score prompt requests concrete spawned-agent evidence instead of delegation-only scoring", () => {
   const prompt = missingScorePrompt(loopState());
 
-  assert.match(prompt, /request a current report now and score what is available/);
-  assert.match(prompt, /partial findings/);
-  assert.match(prompt, /instead of waiting longer/);
+  assert.match(prompt, /do not treat delegation itself as evidence/);
+  assert.match(prompt, /completed reports/);
+  assert.match(prompt, /concrete partial findings/);
 });
 
 test("next run prompt carries bounded research guidance forward", () => {
   const prompt = nextRunPrompt(loopState({ results: [scoreEntry({ turn: 1, score: 70, progressPercent: null })] }));
 
   assert.match(prompt, /Bounded research\/delegation rule/);
-  assert.match(prompt, /move unfinished research into the next scored attempt/);
+  assert.match(prompt, /move unfinished research into the next feedback attempt/);
+});
+
+test("delegation pending prompt refuses to score spawn-only turns", () => {
+  const prompt = delegationPendingPrompt(loopState());
+
+  assert.match(prompt, /spawn-only turn is not scoreable progress/);
+  assert.match(prompt, /Wait for focused agent reports instead of forcing a score/);
+  assert.match(prompt, /lead-owned work that does not duplicate agent scope/);
+  assert.match(prompt, /call loop_feedback with a tiny checkpoint/);
+});
+
+test("next run prompt carries review-gate recovery guidance forward", () => {
+  const prompt = nextRunPrompt(loopState({
+    results: [scoreEntry({
+      outcome: "review_gate_failed",
+      blockers: [{ severity: "important", message: "Non-trivial executable change has no automated review gate evidence." }],
+      categories: [{ key: "reviewGates", label: "Automated review gates", score: 0, max: 10, gaps: ["No automated review gate evidence was provided for executable changes."] }],
+    })],
+  }));
+
+  assert.match(prompt, /Review gate recovery:/);
+  assert.match(prompt, /record the missing gate as an unresolved feedback blocker/);
+  assert.match(prompt, /explicit report deadline before the loop cap/);
 });
 
 test("continue prompt includes plateau analysis from feedback history", () => {

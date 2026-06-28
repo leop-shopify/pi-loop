@@ -127,6 +127,37 @@ test("general ACE playbook and proof dataset are domain-neutral", () => {
   assert.equal(rows.every((row) => row.context && row.question && row.target), true);
 });
 
+test("spawn-only turns wait for agent reports instead of forcing a missing-score prompt", async () => {
+  await withTempDir(async (dir) => {
+    const pi = mockPi();
+    const state = loopState({ results: [], unscoredConsecutiveTurns: 1 });
+    const scheduled = [];
+    const controller = {
+      getState: () => state,
+      enforceLimits: () => false,
+      scheduleResume: (_ctx, _state, message) => scheduled.push(message),
+    };
+
+    registerLoopEvents(pi, controller);
+    await pi.events.get("agent_end")({
+      messages: [{
+        role: "assistant",
+        content: [{ type: "toolCall", id: "spawn-1", name: "spawn_agent", arguments: { prompt: "Inspect one narrow lane." } }],
+        timestamp: Date.now(),
+      }],
+    }, mockContext(dir, pi));
+
+    assert.equal(scheduled.length, 0);
+    assert.equal(state.unscoredConsecutiveTurns, 0);
+    assert.match(state.currentPrompt, /spawn-only turn is not scoreable progress/);
+    assert.deepEqual(pi.stepMessages.map((message) => message.content), [
+      "Step: review loop — loop 1, turn 1/2, total 1/2",
+      "Step: delegation pending — spawned agents are running; waiting for focused reports before feedback",
+    ]);
+    assert.equal(readLogEntries(dir).find((entry) => entry.event === "delegation_pending")?.event, "delegation_pending");
+  });
+});
+
 test("scheduled continuation prompts are ACE enriched when enabled", async () => {
   await withTempDir(async (dir) => {
     writeAceStorage(dir, { playbook: "On continuation, switch to a narrower verification path." });
@@ -145,7 +176,7 @@ test("scheduled continuation prompts are ACE enriched when enabled", async () =>
     assert.equal(scheduled.length, 1);
     assert.match(scheduled[0], /## ACE Playbook Context/);
     assert.match(scheduled[0], /narrower verification path/);
-    assert.match(scheduled[0], /verify one slice, score it, and carry unfinished work/);
+    assert.match(scheduled[0], /verify one slice, record loop_feedback, and carry unfinished work/);
     assert.deepEqual(pi.stepMessages.map((message) => message.content), [
       "Step: review loop — loop 1, turn 1/2, total 1/2",
       "Step: continuing loop — scheduled refined prompt",

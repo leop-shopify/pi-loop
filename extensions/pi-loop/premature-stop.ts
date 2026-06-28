@@ -16,7 +16,7 @@ export function hasCompletionClaim(text: string): boolean {
 }
 
 export function missingScoreReason(claimedCompletion: boolean): string {
-  return claimedCompletion ? "completion claimed without scoring" : "score tool was not called";
+  return claimedCompletion ? "completion claimed without loop_feedback" : "loop_feedback was not called";
 }
 
 export function prematureStopPrompt(state: LoopRuntimeState): string {
@@ -24,7 +24,7 @@ export function prematureStopPrompt(state: LoopRuntimeState): string {
   return [
     "The previous turn claimed completion before the configured loop stop point.",
     `Last progress: ${last ? (last.progressPercent === null || last.progressPercent === undefined ? "baseline recorded" : `${last.progressPercent > 0 ? "+" : ""}${last.progressPercent.toFixed(1)}% over baseline`) : "none"}`,
-    "Treat the completion claim as rejected. Scoring is feedback, not acceptance. Continue from the refined prompt, change strategy, and call score_loop_result again.",
+    "Treat the completion claim as rejected. Feedback is not acceptance. Continue from the refined prompt, change strategy, and call loop_feedback again.",
   ].join("\n\n");
 }
 

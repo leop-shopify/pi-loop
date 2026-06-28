@@ -4,7 +4,7 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { hideFloatingPanel, showFloatingPanel } from "./floating-panel.ts";
 import { bestProgressEntry, formatProgressPercent, progressBarPercent } from "./progress.ts";
 import { runtimeStepHistoryRows, type RuntimeStepRow } from "./runtime-steps.ts";
-import { elapsedMs, lastScore, type LoopRuntimeState } from "./state.ts";
+import { elapsedMs, lastScore, type LoopRuntimeState, type LoopStepHistoryEntry } from "./state.ts";
 
 const PANEL_KEY = "pi-loop";
 const MIN_PROMPT_LINE_LIMIT = 15;
@@ -129,8 +129,8 @@ function promptSummaryLines(state: LoopRuntimeState, width: number): string[] {
   const direction = firstPresent(
     extractSection(prompt, "Required new direction"),
     extractSection(prompt, "Top next actions"),
-    extractSection(prompt, "Next actions from scorer"),
-    extractSection(prompt, "Scorer-suggested directions"),
+    extractSection(prompt, "Next actions from feedback scorer"),
+    extractSection(prompt, "Feedback-scorer suggested directions"),
   );
   const progress = extractLineValue(prompt, "Last progress") ?? lastScoreProgressText(state);
   const budget = extractLineValue(prompt, "Budget");
@@ -142,7 +142,7 @@ function promptSummaryLines(state: LoopRuntimeState, width: number): string[] {
   if (progress) items.push(["Signal", compactSummaryText(progress, 180)]);
   if (direction) items.push(["Plan", compactSummaryText(direction, 320)]);
   if (budget) items.push(["Budget", compactSummaryText(budget, 180)]);
-  items.push(["Expected", "finish one verifiable slice, run the relevant checks, call score_loop_result, and carry leftovers into the next attempt"]);
+  items.push(["Expected", "finish one focused slice, do normal verification/refinement work as needed, call loop_feedback with a tiny checkpoint, and carry leftovers into the next attempt"]);
 
   return items.flatMap(([label, value]) => labeledWrappedLines(label, value, width));
 }
@@ -206,9 +206,25 @@ function sectionRowCount(lineCount: number): number {
 }
 
 function stepHistoryLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
+  const actualSteps = state.stepHistory ?? [];
+  if (actualSteps.length > 0) {
+    return actualSteps
+      .slice(-STEP_HISTORY_LINE_LIMIT)
+      .map((step, index, visibleSteps) => renderRecordedStep(step, actualSteps.length - visibleSteps.length + index + 1, width, theme));
+  }
+
   return runtimeStepHistoryRows(state, STEP_HISTORY_PREVIOUS_ROWS, STEP_HISTORY_NEXT_ROWS)
     .slice(0, STEP_HISTORY_LINE_LIMIT)
     .map((step) => renderHistoryStep(step, width, theme));
+}
+
+function renderRecordedStep(step: LoopStepHistoryEntry, index: number, width: number, theme: Theme): string {
+  const prefix = `${String(index).padStart(2, "0")} `;
+  const turn = step.globalTurn > 0 ? `r${step.run}t${step.turn}` : `r${step.run}`;
+  const label = truncateToWidth(step.step, 22, "…", true);
+  const detail = step.detail ? ` - ${step.detail}` : "";
+  const suffix = ` ${turn}${detail}`;
+  return truncateToWidth(theme.fg("muted", prefix) + theme.fg("warning", label) + theme.fg("dim", suffix), width, "…", true);
 }
 
 function renderHistoryStep(step: RuntimeStepRow, width: number, theme: Theme): string {

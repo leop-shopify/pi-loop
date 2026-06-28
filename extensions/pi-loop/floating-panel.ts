@@ -77,7 +77,13 @@ function targetPanelHeight(rows: number): number {
   const options = floatingPanelOverlayOptions();
   const margin = typeof options.margin === "number" ? { top: options.margin, bottom: options.margin } : options.margin ?? {};
   const marginRows = (margin.top ?? 0) + (margin.bottom ?? 0);
-  return Math.max(1, rows - marginRows);
+  const availableRows = Math.max(1, rows - marginRows);
+  if (typeof options.maxHeight === "string" && options.maxHeight.endsWith("%")) {
+    const percent = Number(options.maxHeight.slice(0, -1));
+    if (Number.isFinite(percent) && percent > 0) return Math.max(1, Math.floor((availableRows * percent) / 100));
+  }
+  if (typeof options.maxHeight === "number") return Math.max(1, Math.min(availableRows, options.maxHeight));
+  return availableRows;
 }
 
 class FloatingPanelComponent<T> implements Component {

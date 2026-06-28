@@ -17,7 +17,7 @@ async function withTempDir(fn) {
   }
 }
 
-test("loop process treats scores as feedback and stops only at the configured limit", async () => {
+test("loop process treats lightweight feedback as progress and stops only at the configured limit", async () => {
   await withTempDir(async (dir) => {
     writeProject(dir);
 
@@ -26,7 +26,7 @@ test("loop process treats scores as feedback and stops only at the configured li
     piLoopExtension(pi);
 
     await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=2 --target=90", ctx);
-    assert.ok(pi.activeTools.includes("score_loop_result"));
+    assert.ok(pi.activeTools.includes("loop_feedback"));
     assert.equal(pi.commands.has("pi-loop"), true);
     assert.equal(pi.shortcuts.size, 1);
     assert.match(pi.sentMessages[0].text, /Target context snapshot:/);
@@ -37,44 +37,50 @@ test("loop process treats scores as feedback and stops only at the configured li
     ]);
 
     await pi.events.get("agent_start")({}, ctx);
-    const baselineResponse = await pi.tools.get("score_loop_result").execute("score-1", weakScoreParams(), new AbortController().signal, () => {}, ctx);
+    recordBashCheck(ctx, "pnpm test", "tests passed");
+    const baselineResponse = await pi.tools.get("loop_feedback").execute("feedback-1", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({}, ctx);
 
     assert.match(baselineResponse.content[0].text, /baseline recorded; continue/);
     assert.match(baselineResponse.content[0].text, /Outcome: needs_iteration/);
     assert.doesNotMatch(baselineResponse.content[0].text, /Heuristic|Raw score|Score:/);
     assert.equal(baselineResponse.terminate, true);
-    assert.equal(pi.activeTools.includes("score_loop_result"), true);
+    assert.equal(pi.activeTools.includes("loop_feedback"), true);
     assert.ok(pi.stepMessages.some((message) => message.content.startsWith("Step: feedback — baseline recorded")));
     assert.ok(pi.stepMessages.some((message) => message.content === "Step: review loop — loop 1, turn 1/2, total 1/2"));
 
     await pi.events.get("agent_start")({}, ctx);
-    const improvedResponse = await pi.tools.get("score_loop_result").execute("score-2", scoreParams(), new AbortController().signal, () => {}, ctx);
+    recordBashCheck(ctx, "pnpm test", "tests passed");
+    recordBashCheck(ctx, "pnpm typecheck", "typecheck passed");
+    recordBashCheck(ctx, "pnpm audit --audit-level high", "No known vulnerabilities found");
+    const improvedResponse = await pi.tools.get("loop_feedback").execute("feedback-2", feedbackParams(), new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({}, ctx);
 
     assert.match(improvedResponse.content[0].text, /Progress: \+/);
     assert.match(improvedResponse.content[0].text, /new best recorded; continue/);
     assert.match(improvedResponse.content[0].text, /Outcome: successful_improvement/);
     assert.doesNotMatch(improvedResponse.content[0].text, /Heuristic|Raw score|Score:/);
-    assert.equal(pi.activeTools.includes("score_loop_result"), false);
+    assert.equal(pi.activeTools.includes("loop_feedback"), false);
     assert.ok(pi.stepMessages.some((message) => message.content.startsWith("Step: starting agent work — loop 1, turn 2/2")));
     assert.ok(pi.stepMessages.some((message) => /Step: feedback — \+/.test(message.content)));
 
     const entries = readLogEntries(dir);
-    assert.deepEqual(entries.map((entry) => entry.type), ["config", "event", "score", "event", "score", "event"]);
-    assert.equal(entries[0].sessionId, "test-session");
-    assert.equal(entries[0].targetContext.baseline.packageManager, "pnpm");
-    assert.equal(entries[1].event, "turn_started");
-    assert.equal(entries[1].globalTurn, 1);
-    assert.equal(entries[2].outcome, "needs_iteration");
-    assert.equal(entries[2].run, 1);
-    assert.equal(entries[2].globalTurn, 1);
-    assert.equal(entries[2].attempt.stopIntent, "claim_done");
-    assert.equal(entries[3].event, "turn_started");
-    assert.equal(entries[3].globalTurn, 2);
-    assert.equal(entries[4].outcome, "successful_improvement");
-    assert.equal(entries[4].improvement > 0, true);
-    assert.match(entries[5].reason, /all runs exhausted/);
+    const processEntries = entries.filter((entry) => entry.event !== "loop_step");
+    assert.deepEqual(processEntries.map((entry) => entry.type), ["config", "event", "score", "event", "score", "event"]);
+    assert.ok(entries.some((entry) => entry.event === "loop_step" && entry.reason === "feedback"));
+    assert.equal(processEntries[0].sessionId, "test-session");
+    assert.equal(processEntries[0].targetContext.baseline.packageManager, "pnpm");
+    assert.equal(processEntries[1].event, "turn_started");
+    assert.equal(processEntries[1].globalTurn, 1);
+    assert.equal(processEntries[2].outcome, "needs_iteration");
+    assert.equal(processEntries[2].run, 1);
+    assert.equal(processEntries[2].globalTurn, 1);
+    assert.equal(processEntries[2].attempt.stopIntent, "continue");
+    assert.equal(processEntries[3].event, "turn_started");
+    assert.equal(processEntries[3].globalTurn, 2);
+    assert.equal(processEntries[4].outcome, "successful_improvement");
+    assert.equal(processEntries[4].improvement > 0, true);
+    assert.match(processEntries[5].reason, /all runs exhausted/);
 
     const finalMessage = pi.sentMessages.at(-1).text;
     assert.match(finalMessage, /pi-loop finished/);
@@ -122,10 +128,10 @@ test("loop clears extension UI when it finishes", async () => {
 
     await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=2", ctx);
     await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("score_loop_result").execute("score-1", weakScoreParams(), new AbortController().signal, () => {}, ctx);
+    await pi.tools.get("loop_feedback").execute("feedback-1", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({}, ctx);
     await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("score_loop_result").execute("score-2", scoreParams(), new AbortController().signal, () => {}, ctx);
+    await pi.tools.get("loop_feedback").execute("feedback-2", feedbackParams(), new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({}, ctx);
 
     assert.equal(ctx.widgetCleared, true);
@@ -142,26 +148,28 @@ test("multi-run process advances after a failed run and stops when all runs are 
 
     await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=1 --runs=2 --target=95", ctx);
     await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("score_loop_result").execute("score-1", { ...scoreParams(), requirements: [{ description: "important", status: "missing" }] }, new AbortController().signal, () => {}, ctx);
+    await pi.tools.get("loop_feedback").execute("feedback-1", { ...feedbackParams(), status: "blocked", notes: "important requirement missing" }, new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Continuing" }] }, ctx);
 
     let entries = readLogEntries(dir);
-    assert.deepEqual(entries.map((entry) => entry.type), ["config", "event", "score", "event", "event"]);
-    assert.equal(entries[1].event, "turn_started");
-    assert.equal(entries[3].event, "run_stopped");
-    assert.equal(entries[4].event, "run_started");
-    assert.ok(pi.activeTools.includes("score_loop_result"));
+    let processEntries = entries.filter((entry) => entry.event !== "loop_step");
+    assert.deepEqual(processEntries.map((entry) => entry.type), ["config", "event", "score", "event", "event"]);
+    assert.equal(processEntries[1].event, "turn_started");
+    assert.equal(processEntries[3].event, "run_stopped");
+    assert.equal(processEntries[4].event, "run_started");
+    assert.ok(pi.activeTools.includes("loop_feedback"));
     assert.ok(pi.stepMessages.some((message) => message.content === "Step: restarting loop 2 — run 2/2"));
 
     await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("score_loop_result").execute("score-2", scoreParams(), new AbortController().signal, () => {}, ctx);
+    await pi.tools.get("loop_feedback").execute("feedback-2", feedbackParams(), new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({}, ctx);
 
     entries = readLogEntries(dir);
-    assert.equal(entries.at(-2).run, 2);
-    assert.equal(entries.at(-2).globalTurn, 2);
-    assert.match(entries.at(-1).reason, /all runs exhausted/);
-    assert.equal(pi.activeTools.includes("score_loop_result"), false);
+    processEntries = entries.filter((entry) => entry.event !== "loop_step");
+    assert.equal(processEntries.at(-2).run, 2);
+    assert.equal(processEntries.at(-2).globalTurn, 2);
+    assert.match(processEntries.at(-1).reason, /all runs exhausted/);
+    assert.equal(pi.activeTools.includes("loop_feedback"), false);
   });
 });
 
@@ -176,14 +184,14 @@ test("missing score and premature completion claims are logged", async () => {
     await pi.events.get("agent_start")({}, ctx);
     await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Done" }] }, ctx);
 
-    let entries = readLogEntries(dir);
+    let entries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
     assert.equal(entries.at(-1).event, "missing_score");
     assert.equal(entries.at(-1).details.claimedCompletion, true);
 
-    await pi.tools.get("score_loop_result").execute("score-1", { ...scoreParams(), requirements: [{ description: "important", status: "missing" }] }, new AbortController().signal, () => {}, ctx);
+    await pi.tools.get("loop_feedback").execute("feedback-1", { ...feedbackParams(), status: "blocked", notes: "important requirement missing" }, new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "All set" }] }, ctx);
 
-    entries = readLogEntries(dir);
+    entries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
     assert.equal(entries.at(-1).event, "premature_stop");
     assert.equal(entries.at(-1).reason, "completion claim before configured loop stop");
   });
@@ -196,24 +204,35 @@ function writeProject(dir) {
   writeFileSync(join(dir, "source.test.mjs"), "import 'node:assert/strict';\n");
 }
 
-function weakScoreParams() {
-  return { ...scoreParams("Run targeted tests, identify missing status evidence, and score the partial attempt."), requirements: [{ description: "Source behavior is verified", status: "partial", evidence: "targeted test passed, but status output not validated" }] };
+function weakFeedbackParams() {
+  return {
+    summary: "Partial feedback recorded; status output still needs verification.",
+    status: "continue",
+    notes: "targeted test passed, but status output was not validated yet",
+  };
 }
 
-function scoreParams(fullPlan = "Run targeted tests and typecheck, then score with artifact and review-gate evidence.") {
+function feedbackParams() {
   return {
-    summary: "Verified source behavior with real checks.",
-    attempt: { rationale: "Prove source behavior with real tests.", fullPlan, actionsTaken: ["ran tests", "ran typecheck"], stopIntent: "claim_done" },
-    artifacts: [{ path: "source.ts", purpose: "source behavior", kind: "source" }, { path: "source.test.mjs", purpose: "behavior test", kind: "test" }],
-    requirements: [{ description: "Source behavior is verified", status: "met", evidence: "targeted test passed" }],
-    checks: [{ name: "tests", status: "passed", kind: "test", required: true, command: "pnpm test", exitCode: 0, evidence: "tests passed" }, { name: "typecheck", status: "passed", kind: "typecheck", required: true, command: "pnpm typecheck", exitCode: 0, evidence: "typecheck passed" }],
-    tests: { files: ["source.test.mjs"], behaviorsCovered: ["source behavior"], regressionCovered: true, edgeCasesCovered: ["default"], failurePathsCovered: ["invalid"], observableAssertions: true, assertionsExerciseBehavior: true, wouldFailOnBug: true, changedCodeCovered: true, integrationOrSystemCovered: true, integrationOrContractCovered: true, usesMocksForOwnedCode: false, mockOnly: false, hasSleeps: false, flaky: false, implementationCoupled: false, externalMocksHaveContractTests: true },
-    design: { responsibilitiesSplit: true, smallFiles: true, solid: true, noGodFiles: true, boundariesClear: true, singleResponsibility: true, lowCouplingHighCohesion: true, complexityControlled: true },
-    rails: { relevant: false },
-    operability: { limitsDefined: true, persistenceDefined: true, loggingAvailable: true, rollbackOrRecoveryDefined: true, humanStopAvailable: true },
-    reviewGates: [{ name: "ci", status: "passed", kind: "ci", required: true, blocksMerge: true, scope: "ci", url: "https://ci.example/pass", evidence: "CI passed" }],
-    risks: [],
+    summary: "Verified source behavior with focused checks.",
+    status: "ready_for_review",
+    notes: "source behavior is ready for final refinement",
+    nextActions: ["carry any leftovers into the next attempt"],
   };
+}
+
+function recordBashCheck(ctx, command, text, exitCode = 0) {
+  ctx.branchEntries.push({
+    type: "message",
+    timestamp: new Date().toISOString(),
+    message: {
+      role: "toolResult",
+      toolName: "bash",
+      content: [{ type: "text", text }],
+      isError: exitCode !== 0,
+      details: { command, exitCode },
+    },
+  });
 }
 
 function mockPi() {
@@ -245,6 +264,7 @@ function mockContext(cwd, hasUI = false) {
     hiddenHandles: 0,
     customCalls: 0,
     statusSetCount: 0,
+    branchEntries: [],
     ui: {
       notify() {},
       setWidget(_name, widget) { if (widget === undefined) ctx.widgetCleared = true; },
@@ -259,7 +279,7 @@ function mockContext(cwd, hasUI = false) {
     },
     isIdle: () => true,
     hasPendingMessages: () => false,
-    sessionManager: { getSessionId: () => "test-session" },
+    sessionManager: { getSessionId: () => "test-session", getBranch: () => ctx.branchEntries },
   };
   return ctx;
 }

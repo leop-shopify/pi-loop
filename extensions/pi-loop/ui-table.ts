@@ -14,7 +14,7 @@ export function renderScoreTable(state: LoopRuntimeState, width: number, theme: 
   if (state.results.length === 0) {
     return [
       truncateToWidth(`  ${theme.fg("dim", "No baseline attempt yet.")}`, width, "…", true),
-      truncateToWidth(`  ${theme.fg("dim", "Call score_loop_result to record the first-loop baseline.")}`, width, "…", true),
+      truncateToWidth(`  ${theme.fg("dim", "Call loop_feedback to record the first-loop baseline.")}`, width, "…", true),
     ];
   }
 

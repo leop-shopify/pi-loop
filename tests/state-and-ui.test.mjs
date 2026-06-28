@@ -15,6 +15,9 @@ import { runtimeStepRows } from "../extensions/pi-loop/runtime-steps.ts";
 import {
   createLoopState,
   deadlineReached,
+  elapsedMs,
+  pauseLoopTimer,
+  resumeLoopTimer,
   scoreEntryFromResult,
   startLoopState,
   turnLimitReached,
@@ -118,7 +121,7 @@ test("state reconstructs historical missing-score turn counters", () => {
       maxMinutes: 10,
       startedAt: Date.now(),
     }));
-    appendLogEntry(dir, { type: "event", schemaVersion: 2, event: "missing_score", timestamp: Date.now(), run: 1, turn: 2, globalTurn: 2, reason: "score tool was not called" });
+    appendLogEntry(dir, { type: "event", schemaVersion: 2, event: "missing_score", timestamp: Date.now(), run: 1, turn: 2, globalTurn: 2, reason: "loop_feedback was not called" });
 
     const reconstructed = reconstructLoopState(dir);
 
@@ -190,6 +193,45 @@ test("deadline and turn limits are enforced deterministically", () => {
   assert.equal(turnLimitReached(state), true);
 });
 
+test("feedback post-processing pauses elapsed loop time", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "pause timer",
+    targetScore: 90,
+    maxTurns: 2,
+    maxMinutes: 1,
+    startedAt: 1_000,
+  });
+
+  pauseLoopTimer(state, 11_000);
+
+  assert.equal(elapsedMs(state, 41_000), 10_000);
+  assert.equal(deadlineReached(state, 71_000), false);
+
+  resumeLoopTimer(state, 41_000);
+
+  assert.equal(elapsedMs(state, 51_000), 20_000);
+});
+
+test("state reconstruction preserves feedback timer pauses", () => {
+  withTempDir((dir) => {
+    const state = createLoopState();
+    appendLogEntry(dir, startLoopState(state, {
+      goal: "persist feedback pause",
+      targetScore: 90,
+      maxTurns: 12,
+      maxMinutes: 1,
+      startedAt: 1_000,
+    }));
+    appendLogEntry(dir, { ...scoreEntryFromResult(1, "first attempt", minimalScore), timestamp: 11_000 });
+
+    const reconstructed = reconstructLoopState(dir, 71_000);
+
+    assert.equal(elapsedMs(reconstructed, 71_000), 10_000);
+    assert.equal(deadlineReached(reconstructed, 71_000), false);
+  });
+});
+
 test("progress and improvement helpers format score state", () => {
   assert.equal(progressPercent(null, 90), 0);
   assert.equal(progressPercent(45, 90), 50);
@@ -208,7 +250,7 @@ test("loop widget renders a passive side-panel dashboard with data, prompt, and 
     maxMinutes: 120,
     startedAt: Date.now() - 123_000,
   });
-  state.currentPrompt = "Continue the pi-loop workflow. Goal: improve the dynamic loop interface. Use real verification and call score_loop_result.";
+  state.currentPrompt = "Continue the pi-loop workflow. Goal: improve the dynamic loop interface. Use real verification and call loop_feedback.";
   state.contextUsage = { tokens: 12_345, contextWindow: 200_000, percent: 6.17 };
   state.turnDurations = [
     { run: 1, turn: 1, globalTurn: 1, startedAt: 1, endedAt: 2, durationMs: 4_000 },
@@ -236,6 +278,31 @@ test("loop widget renders a passive side-panel dashboard with data, prompt, and 
   assert.match(text, /Expected:/);
   assert.doesNotMatch(text, /Continue the pi-loop workflow/);
   assert.equal(lines.every((line) => visibleWidth(line) <= 52), true);
+});
+
+test("loop widget step history tracks emitted pi-loop step messages", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "track emitted loop steps",
+    targetScore: 90,
+    maxTurns: 12,
+    maxMinutes: 10,
+    startedAt: Date.now(),
+  });
+  state.stepHistory = [
+    { step: "feedback", detail: "baseline recorded", run: 1, turn: 1, globalTurn: 1, timestamp: 1 },
+    { step: "review loop", detail: "loop 1, turn 1/12, total 1/12", run: 1, turn: 1, globalTurn: 1, timestamp: 2 },
+    { step: "continuing loop", detail: "scheduled refined prompt", run: 1, turn: 1, globalTurn: 1, timestamp: 3 },
+    { step: "starting agent work", detail: "loop 1, turn 2/12, total 2/12", run: 1, turn: 2, globalTurn: 2, timestamp: 4 },
+  ];
+
+  const text = renderLoopWidget(state, 64, plainTheme, 80).join("\n");
+
+  assert.match(text, /feedback\s+r1t1 - baseline recorded/);
+  assert.match(text, /review loop\s+r1t1 - loop 1, turn 1\/12/);
+  assert.match(text, /continuing loop\s+r1t1 - scheduled refined prompt/);
+  assert.match(text, /starting agent work\s+r1t2 - loop 1, turn 2\/12/);
+  assert.doesNotMatch(text, /> 09 now\s+agent work/);
 });
 
 test("loop widget summarizes the current prompt as a useful plan", () => {
@@ -535,7 +602,8 @@ test("updateLoopWidget clears the old bottom widget and opens the floating panel
   assert.equal(customCall.options.overlay, true);
   assert.equal(customCall.options.overlayOptions().nonCapturing, true);
   assert.equal(customCall.options.overlayOptions().maxHeight, "95%");
-  assert.equal(renderedLines.length, 40);
+  assert.equal(renderedLines.length, 38);
+  assert.match(renderedLines.at(-1), /╯/);
 });
 
 function progressEntry(turn, progressPercent) {

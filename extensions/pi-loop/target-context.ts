@@ -62,7 +62,7 @@ export function formatTargetContext(snapshot: TargetContextSnapshot, maxChars = 
     `- files: ${snapshot.files.length ? snapshot.files.map((file) => `${file.path}${file.exists ? "" : " (missing)"}`).join(", ") : "none normalized"}`,
     `- symbols: ${snapshot.symbols.length ? snapshot.symbols.map((symbol) => symbol.name).join(", ") : "none normalized"}`,
     `- checks: ${snapshot.checks.length ? snapshot.checks.map((check) => check.command).join("; ") : "none normalized"}`,
-    `- previous scored attempts: ${snapshot.history.recentScores.length ? String(snapshot.history.recentScores.length) : "none"}`,
+    `- previous feedback attempts: ${snapshot.history.recentScores.length ? String(snapshot.history.recentScores.length) : "none"}`,
   ];
   const text = lines.join("\n");
   return text.length <= maxChars ? text : `${text.slice(0, maxChars - 12)}\n...truncated`;

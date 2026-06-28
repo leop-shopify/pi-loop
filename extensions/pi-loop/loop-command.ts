@@ -79,11 +79,11 @@ export function registerLoopCommand(pi: ExtensionAPI, controller: LoopController
       appendLogEntry(ctx.cwd, config);
       controller.setScoreToolActive(true);
       updateLoopWidget(ctx, state);
-      sendLoopStepMessage(pi, state, "starting loop", `run ${state.currentRun}/${state.maxRuns}, ${state.maxTurns} attempts max`);
-      ctx.ui.notify(`pi-loop started: ${parsed.minutes} minutes, ${parsed.turns} turns per run, ${parsed.runs} run(s); first score_loop_result call records the baseline`, "info");
+      sendLoopStepMessage(pi, state, "starting loop", `run ${state.currentRun}/${state.maxRuns}, ${state.maxTurns} attempts max`, ctx.cwd);
+      ctx.ui.notify(`pi-loop started: ${parsed.minutes} minutes, ${parsed.turns} turns per run, ${parsed.runs} run(s); first loop_feedback call records the baseline`, "info");
       const aceContext = await buildAceLoopContext(ctx);
       launchAceForLoop(pi, ctx, state, aceContext);
-      sendLoopStepMessage(pi, state, "kickoff prompt", "sent initial loop instructions");
+      sendLoopStepMessage(pi, state, "kickoff prompt", "sent initial loop instructions", ctx.cwd);
       controller.sendWhenReady(kickoffPrompt(state, { aceContext }), ctx);
     },
   };
@@ -106,6 +106,8 @@ function clearLoop(state: Parameters<typeof stopLoop>[0]): void {
   state.goal = null;
   state.turnsStarted = 0;
   state.totalTurnsStarted = 0;
+  state.pausedMs = 0;
+  state.timerPausedAt = null;
   state.runs = [];
   state.sessionId = null;
   state.targetContext = null;
@@ -114,6 +116,7 @@ function clearLoop(state: Parameters<typeof stopLoop>[0]): void {
   state.lastTurnDurationMs = null;
   state.turnDurations = [];
   state.contextUsage = null;
+  state.stepHistory = [];
   state.aceRun = null;
   state.stopReason = "cleared by user";
 }

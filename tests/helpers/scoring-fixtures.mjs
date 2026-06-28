@@ -2,7 +2,7 @@ export const strongInput = {
   goal: "Build pi-loop with scoring and hardening",
   summary: "Implemented bounded loop with time and turn limits, persisted log state, command verification, and separated modules.",
   artifacts: [
-    { path: "extensions/pi-loop/index.ts", purpose: "extension entrypoint", evidence: "loads /loop and score_loop_result", kind: "source" },
+    { path: "extensions/pi-loop/index.ts", purpose: "extension entrypoint", evidence: "loads /loop and loop_feedback", kind: "source" },
     { path: "extensions/pi-loop/scoring-heuristics.ts", purpose: "rubric", evidence: "single scoring source of truth", kind: "source" },
   ],
   requirements: [

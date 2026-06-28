@@ -21,6 +21,6 @@ test("premature-stop prompt rejects completion claims before configured stop", (
 
   assert.match(prompt, /claimed completion/);
   assert.match(prompt, /baseline recorded/);
-  assert.match(prompt, /Scoring is feedback, not acceptance/);
+  assert.match(prompt, /Feedback is not acceptance/);
   assert.match(prompt, /rejected/);
 });

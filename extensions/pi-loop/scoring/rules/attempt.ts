@@ -11,7 +11,7 @@ export const attemptRule: ScoringRule = {
     if (!input.attempt?.rationale?.trim()) caps.push({ value: 85, reason: "Production change is missing a visible attempt rationale." });
     if (!input.attempt?.fullPlan?.trim()) caps.push({ value: 85, reason: "Production change is missing a structured current plan." });
     if (input.attempt?.reusedPriorPlan === true) caps.push({ value: 85, reason: "Attempt reused a prior plan without novel evidence." });
-    if (repeatsPriorPlan(input.attempt?.fullPlan, input.priorAttemptPlans ?? [])) caps.push({ value: 85, reason: "Attempt fullPlan repeats a prior scored attempt." });
+    if (repeatsPriorPlan(input.attempt?.fullPlan, input.priorAttemptPlans ?? [])) caps.push({ value: 85, reason: "Attempt fullPlan repeats a prior feedback attempt." });
 
     return caps;
   },

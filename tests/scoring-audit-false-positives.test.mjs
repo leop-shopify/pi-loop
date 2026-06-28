@@ -3,23 +3,13 @@ import { test } from "node:test";
 
 import { Value } from "typebox/value";
 import { scoreLoopResult } from "../extensions/pi-loop/scoring-heuristics.ts";
-import { ScoreLoopParams } from "../extensions/pi-loop/tool-schema.ts";
+import { LoopFeedbackParams } from "../extensions/pi-loop/tool-schema.ts";
 import { strongInput } from "./helpers/scoring-fixtures.mjs";
 
-test("runtime schema rejects invalid enum values", () => {
-  const invalidCases = [
-    { summary: "x", requirements: [{ description: "r", status: "done" }] },
-    { summary: "x", checks: [{ name: "tests", status: "green", kind: "test" }] },
-    { summary: "x", checks: [{ name: "tests", status: "passed", kind: "unit" }] },
-    { summary: "x", checks: [{ name: "tests", status: "passed", scope: "local" }] },
-    { summary: "x", artifacts: [{ path: "bin/tool", purpose: "tool", kind: "binary" }] },
-    { summary: "x", risks: [{ severity: "severe", description: "risk" }] },
-    { summary: "x", attempt: { rationale: "r", fullPlan: "p", stopIntent: "done" } },
-    { summary: "x", risks: [{ severity: "minor", kind: "bug", description: "risk" }] },
-  ];
-
-  for (const params of invalidCases) assert.equal(Value.Check(ScoreLoopParams, params), false);
-  assert.equal(Value.Check(ScoreLoopParams, { summary: "x", checks: [{ name: "tests", status: "passed", kind: "test", scope: "targeted" }], attempt: { rationale: "r", fullPlan: "p", stopIntent: "claim_done" } }), true);
+test("feedback schema stays tiny and rejects invalid status or heavy evidence payloads", () => {
+  assert.equal(Value.Check(LoopFeedbackParams, { summary: "x", status: "done" }), false);
+  assert.equal(Value.Check(LoopFeedbackParams, { summary: "x", artifacts: [{ path: "source.ts" }] }), false);
+  assert.equal(Value.Check(LoopFeedbackParams, { summary: "x", status: "ready_for_review", notes: "n", nextActions: ["a"] }), true);
 });
 
 test("executable changes require a passed test or coverage command", () => {

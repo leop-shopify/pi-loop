@@ -40,6 +40,15 @@ export interface LoopContextUsageSnapshot {
   percent: number | null;
 }
 
+export interface LoopStepHistoryEntry {
+  step: string;
+  detail?: string;
+  run: number;
+  turn: number;
+  globalTurn: number;
+  timestamp: number;
+}
+
 export interface LoopAceRunState {
   status: "running" | "completed" | "failed" | "skipped";
   mode: "offline" | "online" | "eval_only";
@@ -86,7 +95,7 @@ export interface LoopEventEntry {
   type: "event";
   schemaVersion?: 2;
   timestamp: number;
-  event: "stopped" | "cleared" | "limit_reached" | "resumed" | "run_started" | "run_stopped" | "turn_started" | "missing_score" | "premature_stop" | "ace_run_started" | "ace_run_completed" | "ace_run_failed" | "ace_run_skipped";
+  event: "stopped" | "cleared" | "limit_reached" | "resumed" | "run_started" | "run_stopped" | "turn_started" | "missing_score" | "delegation_pending" | "premature_stop" | "ace_run_started" | "ace_run_completed" | "ace_run_failed" | "ace_run_skipped" | "loop_step";
   reason?: string;
   run?: number;
   turn?: number;
@@ -114,6 +123,8 @@ export interface LoopRuntimeState {
   lastAgentStartScoreCount: number;
   unscoredConsecutiveTurns: number;
   pendingResumeTimer: ReturnType<typeof setTimeout> | null;
+  pausedMs: number;
+  timerPausedAt: number | null;
   results: LoopScoreEntry[];
   runs: LoopRunState[];
   prematureStopCount: number;
@@ -124,6 +135,7 @@ export interface LoopRuntimeState {
   lastTurnDurationMs: number | null;
   turnDurations: LoopTurnDuration[];
   contextUsage: LoopContextUsageSnapshot | null;
+  stepHistory: LoopStepHistoryEntry[];
   aceRun: LoopAceRunState | null;
   panelVisible: boolean;
 }
@@ -155,6 +167,8 @@ export function createLoopState(): LoopRuntimeState {
     lastAgentStartScoreCount: 0,
     unscoredConsecutiveTurns: 0,
     pendingResumeTimer: null,
+    pausedMs: 0,
+    timerPausedAt: null,
     results: [],
     runs: [],
     prematureStopCount: 0,
@@ -165,6 +179,7 @@ export function createLoopState(): LoopRuntimeState {
     lastTurnDurationMs: null,
     turnDurations: [],
     contextUsage: null,
+    stepHistory: [],
     aceRun: null,
     panelVisible: true,
   };
@@ -188,7 +203,21 @@ export function startLoopState(state: LoopRuntimeState, options: LoopStartOption
 }
 
 export function elapsedMs(state: LoopRuntimeState, now: number = Date.now()): number {
-  return state.startedAt === null ? 0 : Math.max(0, now - state.startedAt);
+  if (state.startedAt === null) return 0;
+  const pausedMs = state.pausedMs ?? 0;
+  const activePauseMs = state.timerPausedAt === null || state.timerPausedAt === undefined ? 0 : Math.max(0, now - state.timerPausedAt);
+  return Math.max(0, now - state.startedAt - pausedMs - activePauseMs);
+}
+
+export function pauseLoopTimer(state: LoopRuntimeState, now: number = Date.now()): void {
+  if (!state.active || state.timerPausedAt !== null) return;
+  state.timerPausedAt = now;
+}
+
+export function resumeLoopTimer(state: LoopRuntimeState, now: number = Date.now()): void {
+  if (state.timerPausedAt === null || state.timerPausedAt === undefined) return;
+  state.pausedMs = (state.pausedMs ?? 0) + Math.max(0, now - state.timerPausedAt);
+  state.timerPausedAt = null;
 }
 
 export function deadlineReached(state: LoopRuntimeState, now: number = Date.now()): boolean {

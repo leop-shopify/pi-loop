@@ -58,7 +58,7 @@ export function launchAceForLoop(pi: ExtensionAPI, ctx: ExtensionCommandContext,
     message: "ACE daemon launch requested",
   };
   updateLoopWidget(ctx, state);
-  sendLoopStepMessage(pi, state, "launching ACE", `mode ${DEFAULT_ACE_RUN_MODE}`);
+  sendLoopStepMessage(pi, state, "launching ACE", `mode ${DEFAULT_ACE_RUN_MODE}`, ctx.cwd);
   launchAceDaemon(pi, ctx, state, startedAt);
 }
 
@@ -179,7 +179,7 @@ function recordAceState(
   updateLoopWidget(ctx, state);
 
   const message = formatAceRunMessage(aceRun);
-  sendLoopStepMessage(pi, state, stepForStatus(aceRun.status), message);
+  sendLoopStepMessage(pi, state, stepForStatus(aceRun.status), message, ctx.cwd);
   notify(ctx, message, notifyLevelForStatus(aceRun.status));
 }
 

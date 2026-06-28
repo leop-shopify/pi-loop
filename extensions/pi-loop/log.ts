@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 
 import { ensureParentDir, loopLogPath } from "./paths.ts";
-import { createLoopState, deadlineReached, turnLimitReached, type LoopConfigEntry, type LoopEventEntry, type LoopLogEntry, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
+import { createLoopState, deadlineReached, resumeLoopTimer, turnLimitReached, type LoopConfigEntry, type LoopEventEntry, type LoopLogEntry, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
 
 export function appendLogEntry(cwd: string, entry: LoopLogEntry): void {
   const filePath = loopLogPath(cwd);
@@ -62,6 +62,7 @@ function applyLogEntry(state: LoopRuntimeState, entry: LoopLogEntry, sessionId?:
     const normalized = { ...entry, run: entry.run ?? 1, globalTurn: entry.globalTurn ?? entry.turn };
     state.results.push(normalized);
     recordObservedTurn(state, normalized.run ?? 1, normalized.turn, normalized.globalTurn ?? normalized.turn);
+    state.timerPausedAt = entry.timestamp;
     return;
   }
 
@@ -70,6 +71,10 @@ function applyLogEntry(state: LoopRuntimeState, entry: LoopLogEntry, sessionId?:
 }
 
 function applyEventEntry(state: LoopRuntimeState, entry: LoopEventEntry): void {
+  if (entry.event === "loop_step") {
+    recordLoopStep(state, entry);
+    return;
+  }
   if (entry.event === "run_started" && entry.run) {
     state.currentRun = entry.run;
     state.turnsStarted = 0;
@@ -84,16 +89,32 @@ function applyEventEntry(state: LoopRuntimeState, entry: LoopEventEntry): void {
     return;
   }
   if (entry.event === "turn_started") {
+    resumeLoopTimer(state, entry.timestamp);
     recordObservedTurn(state, entry.run ?? state.currentRun, entry.turn ?? state.turnsStarted + 1, entry.globalTurn ?? entry.turn ?? state.totalTurnsStarted + 1);
     return;
   }
-  if ((entry.event === "missing_score" || entry.event === "premature_stop") && entry.turn) {
+  if ((entry.event === "missing_score" || entry.event === "delegation_pending" || entry.event === "premature_stop") && entry.turn) {
     recordObservedTurn(state, entry.run ?? state.currentRun, entry.turn, entry.globalTurn ?? entry.turn);
   }
   if (entry.event === "missing_score") state.unscoredConsecutiveTurns++;
+  if (entry.event === "delegation_pending") state.unscoredConsecutiveTurns = 0;
   if (entry.event === "premature_stop") state.prematureStopCount++;
   if (entry.event === "ace_run_started" || entry.event === "ace_run_completed" || entry.event === "ace_run_failed" || entry.event === "ace_run_skipped") recordAceRun(state, entry);
   if (entry.event === "stopped" || entry.event === "cleared" || entry.event === "limit_reached") state.stopReason = entry.reason ?? entry.event;
+}
+
+function recordLoopStep(state: LoopRuntimeState, entry: LoopEventEntry): void {
+  const details = entry.details ?? {};
+  const step = typeof details.step === "string" ? details.step : entry.reason;
+  if (!step) return;
+  state.stepHistory = [...(state.stepHistory ?? []), {
+    step,
+    detail: typeof details.detail === "string" ? details.detail : undefined,
+    run: typeof details.run === "number" ? details.run : entry.run ?? state.currentRun,
+    turn: typeof details.turn === "number" ? details.turn : entry.turn ?? state.turnsStarted,
+    globalTurn: typeof details.globalTurn === "number" ? details.globalTurn : entry.globalTurn ?? entry.turn ?? state.totalTurnsStarted,
+    timestamp: typeof details.timestamp === "number" ? details.timestamp : entry.timestamp,
+  }].slice(-50);
 }
 
 function recordAceRun(state: LoopRuntimeState, entry: LoopEventEntry): void {

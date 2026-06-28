@@ -81,7 +81,7 @@ function formatResolvedAceContext(context: string, source: string): string | und
   return [
     truncateContext(trimmed),
     `ACE source: ${source}.`,
-    "Loop pacing: keep the next attempt scoped to the 10-minute cap. Finish a verifiable slice, and carry unfinished tasks into the next scored attempt instead of making this turn longer.",
+    "Loop pacing: keep the next attempt scoped to the 10-minute cap. Finish a verifiable slice, and carry unfinished tasks into the next feedback attempt instead of making this turn longer.",
   ].join("\n\n");
 }
 

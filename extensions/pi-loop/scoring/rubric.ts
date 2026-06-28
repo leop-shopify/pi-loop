@@ -49,8 +49,8 @@ export const SCORING_HEURISTICS = {
     "A loop, job, or runtime implementation without explicit time and turn limits caps the score at 70.",
     "Contradictory status and exit-code evidence caps high scores.",
     "The internal evidence measurement must never be used as the stop cutoff by itself.",
-    "The first scored attempt is a baseline and cannot stop the loop.",
-    "Score improvements are observations, not stop conditions; the loop stops on configured limits, user stop, or repeated missing scorer calls."
+    "The first feedback attempt is a baseline and cannot stop the loop.",
+    "Score improvements are observations, not stop conditions; the loop stops on configured limits, user stop, or repeated missing feedback calls."
   ],
   requiredEvidence: [
     "explicit requirements or acceptance criteria",
@@ -68,13 +68,13 @@ export const SCORING_HEURISTICS = {
 
 export function scoringRubricSummary(): string {
   return [
-    "Loop progress is shown as percent improvement over the first scored turn; internal measurements are not the user-facing result.",
-    "Loop stop rule: score_loop_result provides feedback only; the loop keeps exploring until configured time/turn/run limits, user stop, or repeated missing scorer calls.",
+    "Loop progress is shown as percent improvement over the first feedback turn; internal measurements are not the user-facing result.",
+    "Loop stop rule: loop_feedback provides a tiny checkpoint only; the loop keeps exploring until configured time/turn/run limits, user stop, or repeated missing feedback calls.",
     "Internal evidence categories: correctness, testing quality, design/SOLID, framework-specific/Rails engineering when relevant, verification/gates, automated review gates, and operability.",
     "Tests must assert externally visible behavior and cover the changed code or target bug.",
     "Mocking owned code, mock-only tests, implementation-coupled tests, and flaky sleep-based tests block high scores.",
-    "Verification must include passed test or coverage check entries with command, scope, evidence, and successful exit status for executable changes.",
-    "Non-trivial executable changes need CI, required, or merge-blocking review gate evidence, such as required status checks, quality gates, security scanning, or dependency audit results.",
-    "Rails work must prove ActiveRecord boundaries, transaction/callback safety, strong params/input validation, DB constraints, migration/backfill safety, authorization or tenancy, job idempotency, and query performance where relevant.",
+    "Verification should appear in normal tool history as passed test or coverage commands with successful exit status for executable changes.",
+    "Non-trivial executable changes need CI, required, or merge-blocking review gate evidence from normal checks, such as required status checks, quality gates, security scanning, or dependency audit results.",
+    "Rails work must prove ActiveRecord boundaries, transaction/callback safety, strong params/input validation, DB constraints, migration/backfill safety, authorization or tenancy, job idempotency, and query performance during normal work or final refinement where relevant.",
   ].join("\n");
 }

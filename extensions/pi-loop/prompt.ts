@@ -17,18 +17,18 @@ export function kickoffPrompt(state: LoopRuntimeState, options: LoopPromptOption
     promptAceContext(options),
     boundedResearchDelegationInstruction(),
     "Then implement or investigate using any Pi tools that are useful.",
-    "Keep this attempt short: complete a verifiable slice within the loop cap and move unfinished tasks or research gaps to the next scored attempt.",
-    "At the end of this turn, call score_loop_result with concrete evidence from the attempt plan, requirements, artifacts, verification checks, automated review gates, tests, design, framework-specific safety when relevant, operability, and risks.",
-    "Do not claim completion without scoring the attempt.",
+    "Keep this attempt short: complete a verifiable slice within the loop cap and move unfinished tasks or research gaps to the next feedback attempt.",
+    "At the end of this turn, call loop_feedback with only a tiny summary/status/notes checkpoint. Do not put verification matrices, design rubrics, Rails safety, artifacts, or audit dumps in the feedback tool; run that work during the loop or final refinement instead.",
+    "Do not claim completion without recording feedback.",
     scoringRubricSummary(),
   ].join("\n\n");
 }
 
 export function continuePrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
   const last = state.results[state.results.length - 1];
-  const scoreLine = last ? `Last progress: ${formatProgress(last.progressPercent ?? null)}.` : "No baseline has been recorded yet; the first score_loop_result call records it.";
-  const nextActions = last?.nextActions.length ? `Next actions from scorer:\n${refineNextActions(last.nextActions).map((action) => `- ${action}`).join("\n")}` : "Next action: produce concrete evidence and score this loop attempt.";
-  const blockers = last?.blockers.length ? `Blockers from scorer:\n${last.blockers.map((blocker) => `- ${blocker.severity}: ${blocker.message}`).join("\n")}` : "Blockers from scorer: none";
+  const scoreLine = last ? `Last progress: ${formatProgress(last.progressPercent ?? null)}.` : "No baseline has been recorded yet; the first loop_feedback call records it.";
+  const nextActions = last?.nextActions.length ? `Next actions from feedback scorer:\n${refineNextActions(last.nextActions).map((action) => `- ${action}`).join("\n")}` : "Next action: produce concrete evidence and record a loop_feedback checkpoint.";
+  const blockers = last?.blockers.length ? `Blockers from feedback scorer:\n${last.blockers.map((blocker) => `- ${blocker.severity}: ${blocker.message}`).join("\n")}` : "Blockers from feedback scorer: none";
 
   return [
     "Continue the pi-loop workflow with a refined prompt, not a passive retry.",
@@ -38,23 +38,34 @@ export function continuePrompt(state: LoopRuntimeState, options: LoopPromptOptio
     formatFeedbackHistory(state),
     promptAceContext(options),
     blockers,
+    reviewGateGuidance(state),
     nextActions,
     `Budget: ${runBudgetText(state)}.`,
     boundedResearchDelegationInstruction(),
-    "Strategy rule: use ACE context and scorer feedback to choose a different, verifiable slice. Do not repeat the same plan, evidence, or checks unless you explain why reuse is necessary.",
-    "Progress is feedback only; verify one slice, score it, and carry unfinished work or partial research into the next scored attempt.",
-    "At the end of this turn, call score_loop_result with attempt.rationale and attempt.fullPlan describing the strategy change. Set attempt.reusedPriorPlan false unless the turn is explicitly blocked.",
+    "Strategy rule: use ACE context and feedback-scoring output to choose a different, verifiable slice. Do not repeat the same plan, evidence, or checks unless you explain why reuse is necessary.",
+    "Progress is feedback only; verify one slice, record loop_feedback, and carry unfinished work or partial research into the next feedback attempt.",
+    "At the end of this turn, call loop_feedback with a tiny summary/status/notes checkpoint. Keep hardening, verification, and audit work in normal loop actions or final refinement, not in the feedback tool input.",
   ].join("\n\n");
 }
 
 export function missingScorePrompt(state: LoopRuntimeState, claimedCompletion = false): string {
   return [
-    claimedCompletion ? "The previous turn claimed completion without calling score_loop_result." : "The previous pi-loop turn ended without calling score_loop_result.",
-    "Do not do more implementation work before scoring the current state.",
+    claimedCompletion ? "The previous turn claimed completion without calling loop_feedback." : "The previous pi-loop turn ended without calling loop_feedback.",
+    "Do not do more implementation work before recording feedback for the current state.",
     `Goal: ${state.goal ?? ""}`,
     `Budget: ${runBudgetText(state)}.`,
-    "If you were waiting on spawned agents or data collection, request a current report now and score what is available: use completed findings, partial findings, or an honest missing-evidence note instead of waiting longer.",
-    "Call score_loop_result now with the evidence you have. If evidence is missing, report the missing checks honestly so the scorer can guide the next turn.",
+    "If spawned agents or data collection are involved, do not treat delegation itself as evidence: use completed reports, concrete partial findings, or an honest missing-evidence note only.",
+    "Call loop_feedback now with a tiny summary/status/notes checkpoint. Do not expand it into a verification report; missing checks belong in notes or next actions for the next/refinement step.",
+  ].join("\n\n");
+}
+
+export function delegationPendingPrompt(state: LoopRuntimeState): string {
+  return [
+    "Delegation is in progress for pi-loop; a spawn-only turn is not scoreable progress.",
+    `Goal: ${state.goal ?? ""}`,
+    `Budget: ${runBudgetText(state)}.`,
+    "Wait for focused agent reports instead of forcing a score. If there is independent lead-owned work that does not duplicate agent scope, do that in the next user/extension wake-up; otherwise let the team report first.",
+    "When reports arrive, synthesize the evidence, verify one concrete slice, then call loop_feedback with a tiny checkpoint. Near the loop cap, request partial reports and list missing pieces as next actions.",
   ].join("\n\n");
 }
 
@@ -66,8 +77,9 @@ export function nextRunPrompt(state: LoopRuntimeState, options: LoopPromptOption
     `Budget: ${runBudgetText(state)}.`,
     formatFeedbackHistory(state),
     promptAceContext(options),
+    reviewGateGuidance(state),
     boundedResearchDelegationInstruction(),
-    "Use ACE context plus prior feedback to choose a genuinely different short plan. State the new direction in attempt.rationale and attempt.fullPlan, then call score_loop_result at the end of the turn.",
+    "Use ACE context plus prior feedback to choose a genuinely different short plan. Call loop_feedback at the end of the turn with only a tiny summary/status/notes checkpoint.",
   ].join("\n\n");
 }
 
@@ -78,12 +90,12 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
     `Limits: ${state.maxMinutes} minutes, ${state.maxTurns} turns per run, and ${state.maxRuns} run(s). Defaults are 10 minutes, 12 turns, and 1 run unless the user configured otherwise; minutes are capped at 10.`,
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
     boundedResearchDelegationInstruction(),
-    "A loop turn starts when the agent begins work and ends when it reports evidence through score_loop_result. The extension treats the first scored turn as a hidden baseline and keeps using feedback until a configured limit or user stop is reached.",
+    "A loop turn starts when the agent begins work and ends when it records a tiny loop_feedback checkpoint. The extension treats the first feedback turn as a hidden baseline and keeps using feedback until a configured limit or user stop is reached.",
     "You may use any active Pi tools needed to solve the goal. The extension does not sandbox your tool choices, so be disciplined and produce evidence.",
-    "You must call score_loop_result before presenting a completion claim.",
-    "Include attempt.rationale and attempt.fullPlan so the next refined prompt can compare strategy against prior attempts.",
-    "Hard rules: map requirements, list artifacts, use real passed checks, include automated review gate evidence for executable changes, assert observable behavior, do not use mock-only or implementation-coupled tests, do not mock owned code, keep responsibilities split, avoid god files, and apply framework-specific safety when Rails or similar framework code is involved.",
-    "Loop pacing: finish a verifiable slice within the 10-minute cap; spawned agents and data collection are useful but stay inside that cap, with partial results carried to the next scored attempt.",
+    "You must call loop_feedback before presenting a completion claim.",
+    "Keep loop_feedback tiny. Do not use it as a massive verification, artifact, design, Rails, or audit report; those checks happen during normal work or final refinement.",
+    "Hard rules for the work itself: map requirements, use real passed checks when changing executable code, assert observable behavior, do not use mock-only or implementation-coupled tests, do not mock owned code, keep responsibilities split, avoid god files, and apply framework-specific safety when Rails or similar framework code is involved.",
+    "Loop pacing: finish a verifiable slice within the 10-minute cap; spawned agents and data collection are useful but stay inside that cap, with partial results carried to the next feedback attempt.",
     scoringRubricSummary(),
   ].join("\n");
 }
@@ -93,12 +105,31 @@ function promptAceContext(options: LoopPromptOptions): string | undefined {
 }
 
 function boundedResearchDelegationInstruction(): string {
-  return "Bounded research/delegation rule: spawned research agents are allowed and valuable when they can return useful evidence inside the scored loop cap. Give every spawned agent an explicit report deadline before timeout, ideally under 10 minutes; pi-loop cannot interrupt child agents for you, so reserve time to request a final or partial report before the cap. Score available findings instead of waiting longer, list missing pieces as nextActions, and move unfinished research into the next scored attempt.";
+  return "Bounded research/delegation rule: spawned research agents are allowed and valuable when they can return useful evidence inside the loop cap, but delegation itself is not progress evidence. Keep the lead responsible for decomposition, synthesis, verification, and loop_feedback. When independent questions exist, prefer several small read-only research/review lanes over one broad \"do the whole goal\" agent; each spawned agent needs a narrow question, concrete files or search targets, a report shape, and an explicit report deadline before timeout, ideally under 10 minutes. pi-loop cannot interrupt child agents for you: do independent lead-owned work while they run when possible, otherwise wait for reports instead of forcing a feedback checkpoint. Near the cap, request final or partial reports, record a tiny loop_feedback checkpoint, list missing pieces as nextActions, and move unfinished research into the next feedback attempt.";
+}
+
+function reviewGateGuidance(state: LoopRuntimeState): string | undefined {
+  const last = state.results.at(-1);
+  if (!last) return undefined;
+
+  const reviewCategory = last.categories.find((category) => category.key === "reviewGates");
+  const reviewBlockers = last.blockers.filter((blocker) => /review gate|automated review|required gate|merge-blocking|\bCI\b/i.test(blocker.message));
+  const reviewGaps = (reviewCategory?.gaps ?? []).filter(Boolean);
+  const needsGuidance = last.outcome === "review_gate_failed" || reviewBlockers.length > 0 || (reviewCategory !== undefined && reviewCategory.score < reviewCategory.max);
+  if (!needsGuidance) return undefined;
+
+  const evidenceLines = [...reviewBlockers.slice(0, 2).map((blocker) => `- Gate blocker: ${blocker.message}`), ...reviewGaps.slice(0, 3).map((gap) => `- Gate gap: ${gap}`)];
+  return [
+    "Review gate recovery:",
+    ...evidenceLines,
+    "- Before more implementation, either run or obtain a passed CI, required, or merge-blocking review gate for executable changes, or record the missing gate as an unresolved feedback blocker.",
+    "- If review evidence needs another agent, delegate a bounded read-only review lane with the failed or missing gate, exact files/checks, and an explicit report deadline before the loop cap.",
+  ].join("\n");
 }
 
 function refinementObservation(state: LoopRuntimeState): string {
   const last = state.results.at(-1);
-  if (!last) return "Refined observation: no scored attempt yet. First score_loop_result call establishes the baseline.";
+  if (!last) return "Refined observation: no feedback attempt yet. First loop_feedback call establishes the baseline.";
   return [
     "Refined observation from the previous attempt:",
     whatWasTried(last),
@@ -128,7 +159,7 @@ function whatDidNotImprove(state: LoopRuntimeState, entry: LoopScoreEntry): stri
   for (const blocker of entry.blockers.slice(0, 3)) signals.push(`Blocker still present: ${blocker.severity}: ${blocker.message}`);
   for (const finding of entry.verifierFindings?.slice(0, 3) ?? []) signals.push(`Verifier finding: ${finding.severity}: ${finding.message}`);
   for (const gap of categoryGaps(entry).slice(0, 4)) signals.push(`Evidence gap: ${gap}`);
-  if (!signals.length) signals.push("No scorer blockers were reported, so improve by adding stronger evidence, broader checks, or a different implementation strategy rather than repeating the same proof.");
+  if (!signals.length) signals.push("No feedback-scorer blockers were reported, so improve by adding stronger evidence, broader checks, or a different implementation strategy rather than repeating the same proof.");
   return ["What did not improve enough:", ...signals.map((signal) => `- ${signal}`)].join("\n");
 }
 
@@ -141,8 +172,8 @@ function requiredNewDirection(state: LoopRuntimeState, entry: LoopScoreEntry): s
     `- ${bestLine}`,
     "- Choose a materially different next action before editing or testing again.",
     "- If the last attempt plateaued, branch to a different hypothesis instead of polishing the same path.",
-    "- The next score must show new evidence or explain the blocker; repeated progress is not acceptance.",
-    ...(actions.length ? ["Scorer-suggested directions:", ...actions] : []),
+    "- The next feedback checkpoint must show new evidence or explain the blocker; repeated progress is not acceptance.",
+    ...(actions.length ? ["Feedback-scorer suggested directions:", ...actions] : []),
   ].join("\n");
 }
 
