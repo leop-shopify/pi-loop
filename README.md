@@ -103,7 +103,7 @@ Defaults:
 
 | Setting | Default |
 | --- | --- |
-| Timebox | 10 minutes for scored loop work (capped); optional initial research gate has a 30-minute cap when justified by prompt complexity or missing information. |
+| Timebox | 10 minutes for scored loop work and data collection (capped); spawned agents should report before the cap and partial findings carry into the next attempt. |
 | Turn limit | 12 total attempts |
 | Run count | 1 |
 
@@ -116,26 +116,26 @@ Defaults:
 | Input program | A loop nest extracted from a source program. | A software engineering goal plus the repository state the agent inspects. |
 | Context prompt | Fixed system instructions describing role, input format, output format, action space, hardware, and crash handling. | `systemPromptAddon()` plus `scoringRubricSummary()`: role, limits, scoring contract, hard rules, required evidence, and stop conditions. |
 | Target loop presentation | The selected loop nest is normalized and shown to the LLM. | `/loop` builds a bounded context snapshot: cwd, package manager, package scripts, git branch/status, changed files, and recent scores. The agent still chooses the exact files to inspect. |
-| Initial analysis | The LLM must analyze the loop before proposing transformations. | The kickoff prompt explicitly requires analysis of problem, files, acceptance criteria, verification, and whether the first request needs a separate post-context research gate before implementation. |
+| Initial analysis | The LLM must analyze the loop before proposing transformations. | The kickoff prompt explicitly requires analysis of problem, files, acceptance criteria, verification, and whether scoped research or delegation is needed inside the same capped loop round. |
 | Schedule proposition | The LLM proposes transformations in a structured format. | `score_loop_result` requires `attempt.rationale` and `attempt.fullPlan` evidence for production changes, giving pi-loop a visible plan/attempt analogue without restricting all Pi tools. |
 | Response parser | Extracts the schedule from the LLM response. | TypeBox validates the `score_loop_result` input schema, including enum-safe attempt, check, artifact, risk, and review-gate evidence. |
 | Validity and legality checks | Lightweight syntax checks plus compiler legality checks. | Strict schema validation, independent evidence verification, and scoring hard caps flag or cap weak evidence and unresolved risks; pi-loop still does not formally prove arbitrary code safety. |
 | Compiler/runtime feedback | Reports invalid, illegal, solver failure, crash, or successful speedup/slowdown. | Reports typed outcome plus progress/evidence feedback: baseline recorded, new-best progress, verifier findings, blockers, strengths, and next actions. |
 | Optimization history | Feedback is appended to the dialogue so the next iteration can adapt. | Progress entries are appended to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`; continuation prompts are rebuilt as refined prompts with what was tried, what did not improve, plateau/repeat signals, best attempt to beat, blockers, next actions, budget, and compact ACE playbook context from `pi-ace-adapter` when enabled. |
-| Stopping condition | Stop command or iteration limit; the framework can push past premature LLM stop attempts. | A 10-minute capped timebox for scored loop work, optional 30-minute initial research gate only when justified, 12-attempt global turn budget, run limit, user stop, or repeated missing scorer calls. Positive heuristic progress alone never stops the loop. |
+| Stopping condition | Stop command or iteration limit; the framework can push past premature LLM stop attempts. | A 10-minute capped timebox for scored loop work and data collection, 12-attempt global turn budget, run limit, user stop, or repeated missing scorer calls. Positive heuristic progress alone never stops the loop. |
 
 ## Runtime context steps
 
 1. `/loop <goal>` parses command input into a loop config: goal, max turns, max runs, and max minutes.
 2. pi-loop builds a bounded context snapshot from the current working directory, package scripts, git state, changed files, and prior scored attempts.
-3. The kickoff instructions require an initial complexity gate after context capture. If the first request genuinely needs extra data, information, or research that the captured context does not provide, the agent may take a separate 30-minute research step, spawn focused agents to gather and organize the content, explain why the gate is needed, and then start the official scored loop from the synthesized context. This is not a default excuse to spend time or tokens.
+3. The kickoff instructions allow bounded research and delegation only inside the same capped loop round. Spawned agents should get explicit report deadlines before the 10-minute cap; at timeout, the loop should capture final or partial findings, score the current evidence, and carry remaining research into the next attempt.
 4. The config plus context snapshot and current Pi session id are appended to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` as a `config` entry.
 5. `score_loop_result` is activated for the session.
 6. pi-loop requests a daemon-ish ACE run through `pi-ace-adapter` when ACE storage is enabled and the selected playbook exists. The loop does not wait for ACE completion; output and metadata paths are logged.
-7. A kickoff prompt is sent as a normal user message. It includes the context snapshot, compact ACE context when enabled, and asks the agent to analyze first, apply the complexity/research gate only when justified, then work, then score.
-8. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules, and evidence requirements.
+7. A kickoff prompt is sent as a normal user message. It includes the context snapshot, compact ACE context when enabled, and asks the agent to analyze first, use bounded research/delegation when useful, then work, then score.
+8. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules, bounded delegation rules, and evidence requirements.
 9. On `agent_start`, pi-loop increments the turn counter, appends a `turn_started` event, and records how many score entries existed before the turn.
-10. The agent works with normal Pi tooling. pi-loop does not sandbox tools or prescribe the implementation path.
+10. The agent works with normal Pi tooling. pi-loop does not sandbox tools or prescribe the implementation path, and spawned-agent data collection remains part of the same loop cap.
 11. Before claiming completion, the agent must call `score_loop_result` with structured attempt and evidence.
 12. The score tool verifies evidence, classifies the outcome, appends a progress entry to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`, updates the widget, and returns progress feedback. The first call records only the baseline.
 13. On `agent_end`, pi-loop checks whether the turn produced a score:
@@ -169,7 +169,7 @@ Parsed config:
 }
 ```
 
-`--turns` is per run when `--runs > 1`, but it is capped at 12 and `runs * turns` must stay within the 12-attempt global safety cap. `--minutes` remains a global timebox across scored loop work and is capped at 10 minutes; a justified initial research gate may use a separate 30-minute budget when the first prompt needs missing data or research before the scored loop starts. Unfinished scored-loop work should move to the next attempt instead of stretching the turn. `--runs` is capped at 5.
+`--turns` is per run when `--runs > 1`, but it is capped at 12 and `runs * turns` must stay within the 12-attempt global safety cap. `--minutes` remains a global timebox across scored loop work and data collection and is capped at 10 minutes. Spawned agents should report before that cap; partial research should be scored honestly and moved to the next attempt instead of stretching the turn. `--runs` is capped at 5.
 
 ### `score_loop_result` tool input
 

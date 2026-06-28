@@ -12,12 +12,12 @@ export interface LoopPromptOptions {
 export function kickoffPrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
   return [
     `Start the pi-loop workflow for this goal: ${state.goal ?? ""}`,
-    "First analyze the problem, files likely involved, acceptance criteria, and verification strategy.",
+    "First analyze the problem, files likely involved, acceptance criteria, verification strategy, and whether scoped research or delegation is needed.",
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
     promptAceContext(options),
-    initialResearchGateInstruction(),
+    boundedResearchDelegationInstruction(),
     "Then implement or investigate using any Pi tools that are useful.",
-    "Keep this attempt short: complete a verifiable slice within the loop cap and move unfinished tasks to the next scored attempt.",
+    "Keep this attempt short: complete a verifiable slice within the loop cap and move unfinished tasks or research gaps to the next scored attempt.",
     "At the end of this turn, call score_loop_result with concrete evidence from the attempt plan, requirements, artifacts, verification checks, automated review gates, tests, design, framework-specific safety when relevant, operability, and risks.",
     "Do not claim completion without scoring the attempt.",
     scoringRubricSummary(),
@@ -40,8 +40,9 @@ export function continuePrompt(state: LoopRuntimeState, options: LoopPromptOptio
     blockers,
     nextActions,
     `Budget: ${runBudgetText(state)}.`,
+    boundedResearchDelegationInstruction(),
     "Strategy rule: use ACE context and scorer feedback to choose a different, verifiable slice. Do not repeat the same plan, evidence, or checks unless you explain why reuse is necessary.",
-    "Progress is feedback only; verify one slice, score it, and carry unfinished work into the next scored attempt.",
+    "Progress is feedback only; verify one slice, score it, and carry unfinished work or partial research into the next scored attempt.",
     "At the end of this turn, call score_loop_result with attempt.rationale and attempt.fullPlan describing the strategy change. Set attempt.reusedPriorPlan false unless the turn is explicitly blocked.",
   ].join("\n\n");
 }
@@ -52,6 +53,7 @@ export function missingScorePrompt(state: LoopRuntimeState, claimedCompletion = 
     "Do not do more implementation work before scoring the current state.",
     `Goal: ${state.goal ?? ""}`,
     `Budget: ${runBudgetText(state)}.`,
+    "If you were waiting on spawned agents or data collection, request a current report now and score what is available: use completed findings, partial findings, or an honest missing-evidence note instead of waiting longer.",
     "Call score_loop_result now with the evidence you have. If evidence is missing, report the missing checks honestly so the scorer can guide the next turn.",
   ].join("\n\n");
 }
@@ -64,6 +66,7 @@ export function nextRunPrompt(state: LoopRuntimeState, options: LoopPromptOption
     `Budget: ${runBudgetText(state)}.`,
     formatFeedbackHistory(state),
     promptAceContext(options),
+    boundedResearchDelegationInstruction(),
     "Use ACE context plus prior feedback to choose a genuinely different short plan. State the new direction in attempt.rationale and attempt.fullPlan, then call score_loop_result at the end of the turn.",
   ].join("\n\n");
 }
@@ -74,13 +77,13 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
     `Goal: ${state.goal ?? ""}`,
     `Limits: ${state.maxMinutes} minutes, ${state.maxTurns} turns per run, and ${state.maxRuns} run(s). Defaults are 10 minutes, 12 turns, and 1 run unless the user configured otherwise; minutes are capped at 10.`,
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
-    initialResearchGateInstruction(),
+    boundedResearchDelegationInstruction(),
     "A loop turn starts when the agent begins work and ends when it reports evidence through score_loop_result. The extension treats the first scored turn as a hidden baseline and keeps using feedback until a configured limit or user stop is reached.",
     "You may use any active Pi tools needed to solve the goal. The extension does not sandbox your tool choices, so be disciplined and produce evidence.",
     "You must call score_loop_result before presenting a completion claim.",
     "Include attempt.rationale and attempt.fullPlan so the next refined prompt can compare strategy against prior attempts.",
     "Hard rules: map requirements, list artifacts, use real passed checks, include automated review gate evidence for executable changes, assert observable behavior, do not use mock-only or implementation-coupled tests, do not mock owned code, keep responsibilities split, avoid god files, and apply framework-specific safety when Rails or similar framework code is involved.",
-    "Loop pacing: except for a justified initial research gate, finish a verifiable slice within the 10-minute cap; unfinished tasks should move to the next scored attempt.",
+    "Loop pacing: finish a verifiable slice within the 10-minute cap; spawned agents and data collection are useful but stay inside that cap, with partial results carried to the next scored attempt.",
     scoringRubricSummary(),
   ].join("\n");
 }
@@ -89,8 +92,8 @@ function promptAceContext(options: LoopPromptOptions): string | undefined {
   return options.aceContext?.trim() ? options.aceContext.trim() : undefined;
 }
 
-function initialResearchGateInstruction(): string {
-  return "Initial request complexity gate: after the captured context is available, evaluate the user's first request and decide whether the normal loop context is enough. If the prompt genuinely needs extra data, information, or research before the first scored slice, insert a post-capture-context research step with a 30-minute budget instead of the normal 10-minute loop cap; you may spawn focused agents to gather content, compare sources, and organize findings before starting the official scored loop. Do not use this as a default excuse to spend time or tokens: take it only when the prompt complexity or missing information requires it, and state why.";
+function boundedResearchDelegationInstruction(): string {
+  return "Bounded research/delegation rule: spawned research agents are allowed and valuable when they can return useful evidence inside the scored loop cap. Give every spawned agent an explicit report deadline before timeout, ideally under 10 minutes; pi-loop cannot interrupt child agents for you, so reserve time to request a final or partial report before the cap. Score available findings instead of waiting longer, list missing pieces as nextActions, and move unfinished research into the next scored attempt.";
 }
 
 function refinementObservation(state: LoopRuntimeState): string {

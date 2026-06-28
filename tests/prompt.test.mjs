@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { continuePrompt, kickoffPrompt, systemPromptAddon } from "../extensions/pi-loop/prompt.ts";
+import { continuePrompt, kickoffPrompt, missingScorePrompt, nextRunPrompt, systemPromptAddon } from "../extensions/pi-loop/prompt.ts";
 
 test("continue prompt includes score, blockers, next actions, and budget", () => {
   const prompt = continuePrompt(loopState({
@@ -31,6 +31,8 @@ test("continue prompt includes score, blockers, next actions, and budget", () =>
   assert.match(prompt, /Next actions from scorer:\n- Verification: add a passed test check/);
   assert.match(prompt, /Progress trend: r1t2:\+20\.0%/);
   assert.match(prompt, /Budget: run 1\/1, turn 3\/5, total turns 2\/5, 30 minute capped timebox/);
+  assert.match(prompt, /Bounded research\/delegation rule/);
+  assert.match(prompt, /pi-loop cannot interrupt child agents for you/);
   assert.match(prompt, /What was tried: inspected scorer; ran partial checks/);
   assert.match(prompt, /What did not improve enough:/);
   assert.match(prompt, /Strategy rule: use ACE context and scorer feedback/);
@@ -76,24 +78,40 @@ test("continue prompt includes ACE context when provided", () => {
 
   assert.match(prompt, /## ACE Loop Context/);
   assert.match(prompt, /Prefer short verifiable slices\./);
-  assert.match(prompt, /verify one slice, score it, and carry unfinished work into the next scored attempt\./);
+  assert.match(prompt, /verify one slice, score it, and carry unfinished work or partial research into the next scored attempt\./);
 });
 
-test("kickoff prompt includes the complexity-gated initial research exception", () => {
+test("kickoff prompt includes bounded spawned-agent research guidance", () => {
   const prompt = kickoffPrompt(loopState());
 
-  assert.match(prompt, /Initial request complexity gate/);
-  assert.match(prompt, /post-capture-context research step with a 30-minute budget/);
-  assert.match(prompt, /Do not use this as a default excuse to spend time or tokens/);
+  assert.match(prompt, /Bounded research\/delegation rule/);
+  assert.match(prompt, /spawned research agents are allowed and valuable/);
+  assert.match(prompt, /explicit report deadline before timeout/);
+  assert.match(prompt, /Score available findings instead of waiting longer/);
 });
 
-test("system prompt advertises short capped defaults and the research gate exception", () => {
+test("system prompt advertises short capped defaults and bounded spawned-agent pacing", () => {
   const prompt = systemPromptAddon(loopState({ maxMinutes: 10, maxTurns: 12 }));
 
   assert.match(prompt, /Defaults are 10 minutes, 12 turns, and 1 run/);
   assert.match(prompt, /minutes are capped at 10/);
-  assert.match(prompt, /Initial request complexity gate/);
-  assert.match(prompt, /except for a justified initial research gate/);
+  assert.match(prompt, /pi-loop cannot interrupt child agents for you/);
+  assert.match(prompt, /spawned agents and data collection are useful but stay inside that cap/);
+});
+
+test("missing score prompt requests available spawned-agent evidence instead of waiting", () => {
+  const prompt = missingScorePrompt(loopState());
+
+  assert.match(prompt, /request a current report now and score what is available/);
+  assert.match(prompt, /partial findings/);
+  assert.match(prompt, /instead of waiting longer/);
+});
+
+test("next run prompt carries bounded research guidance forward", () => {
+  const prompt = nextRunPrompt(loopState({ results: [scoreEntry({ turn: 1, score: 70, progressPercent: null })] }));
+
+  assert.match(prompt, /Bounded research\/delegation rule/);
+  assert.match(prompt, /move unfinished research into the next scored attempt/);
 });
 
 test("continue prompt includes plateau analysis from feedback history", () => {

@@ -316,7 +316,7 @@ test("loop status reports the README runtime steps", () => {
 
   assert.match(text, /Runtime steps:/);
   assert.match(text, /01\. done\s+parse config/);
-  assert.match(text, /03\. waiting\s+research gate/);
+  assert.match(text, /03\. waiting\s+bounded research/);
   assert.match(text, /10\. active\s+measure progress/);
   assert.match(text, /13\. waiting\s+reconstruct/);
 });

@@ -34,7 +34,7 @@ export function runtimeStepRows(state: LoopRuntimeState): RuntimeStepRow[] {
   return finalizeRuntimeRows([
     row(1, "parse config", hasConfig, state.active, configDetail(state)),
     row(2, "capture context", hasContext, state.active && !hasTurn, contextDetail(state)),
-    row(3, "research gate", hasContext, state.active && !hasTurn, "optional 30m only when first request needs missing data"),
+    row(3, "bounded research", hasContext, state.active && !hasTurn, "spawned agents report before the 10m cap; partial findings carry forward"),
     row(4, "persist log", hasConfig, state.active, "~/.pi/agent/pi-loop/projects/.../log.jsonl config entry"),
     row(5, "enable scorer", hasConfig, state.active, state.active ? "score_loop_result available" : "score_loop_result disabled"),
     row(6, "kickoff prompt", hasConfig, state.active && !hasTurn, "analysis, files, acceptance criteria, verification"),
