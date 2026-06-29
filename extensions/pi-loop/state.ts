@@ -49,6 +49,12 @@ export interface LoopStepHistoryEntry {
   timestamp: number;
 }
 
+export interface LoopPendingFeedbackTurn {
+  run: number;
+  turn: number;
+  globalTurn: number;
+}
+
 export interface LoopAceRunState {
   status: "running" | "completed" | "failed" | "skipped";
   mode: "offline" | "online" | "eval_only";
@@ -122,6 +128,7 @@ export interface LoopRuntimeState {
   turnsStarted: number;
   lastAgentStartScoreCount: number;
   unscoredConsecutiveTurns: number;
+  pendingFeedbackTurn: LoopPendingFeedbackTurn | null;
   pendingResumeTimer: ReturnType<typeof setTimeout> | null;
   pausedMs: number;
   timerPausedAt: number | null;
@@ -166,6 +173,7 @@ export function createLoopState(): LoopRuntimeState {
     turnsStarted: 0,
     lastAgentStartScoreCount: 0,
     unscoredConsecutiveTurns: 0,
+    pendingFeedbackTurn: null,
     pendingResumeTimer: null,
     pausedMs: 0,
     timerPausedAt: null,

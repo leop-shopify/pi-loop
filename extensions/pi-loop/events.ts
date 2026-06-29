@@ -29,6 +29,16 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     if (!state.active) return;
     controller.cancelPendingResume(state);
     const startedAt = Date.now();
+
+    if (state.pendingFeedbackTurn) {
+      resumeLoopTimer(state, startedAt);
+      state.lastAgentStartScoreCount = state.results.length;
+      captureContextUsage(ctx, state);
+      updateLoopWidget(ctx, state);
+      sendLoopStepMessage(pi, state, "recording feedback", loopTurnDetail(state), ctx.cwd);
+      return;
+    }
+
     resumeLoopTimer(state, startedAt);
     state.turnsStarted++;
     state.totalTurnsStarted++;
@@ -65,6 +75,7 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
       }
 
       state.unscoredConsecutiveTurns++;
+      state.pendingFeedbackTurn = { run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted };
       appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "missing_score", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, reason: missingScoreReason(claimedCompletion), details: { claimedCompletion } });
       sendLoopStepMessage(pi, state, "missing feedback", missingScoreReason(claimedCompletion), ctx.cwd);
       if (state.unscoredConsecutiveTurns > MAX_UNSCORED_REMINDERS) {

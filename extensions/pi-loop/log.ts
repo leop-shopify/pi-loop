@@ -61,6 +61,7 @@ function applyLogEntry(state: LoopRuntimeState, entry: LoopLogEntry, sessionId?:
     if (!state.goal) return;
     const normalized = { ...entry, run: entry.run ?? 1, globalTurn: entry.globalTurn ?? entry.turn };
     state.results.push(normalized);
+    state.pendingFeedbackTurn = null;
     recordObservedTurn(state, normalized.run ?? 1, normalized.turn, normalized.globalTurn ?? normalized.turn);
     state.timerPausedAt = entry.timestamp;
     return;
@@ -90,14 +91,25 @@ function applyEventEntry(state: LoopRuntimeState, entry: LoopEventEntry): void {
   }
   if (entry.event === "turn_started") {
     resumeLoopTimer(state, entry.timestamp);
+    state.pendingFeedbackTurn = null;
     recordObservedTurn(state, entry.run ?? state.currentRun, entry.turn ?? state.turnsStarted + 1, entry.globalTurn ?? entry.turn ?? state.totalTurnsStarted + 1);
     return;
   }
   if ((entry.event === "missing_score" || entry.event === "delegation_pending" || entry.event === "premature_stop") && entry.turn) {
     recordObservedTurn(state, entry.run ?? state.currentRun, entry.turn, entry.globalTurn ?? entry.turn);
   }
-  if (entry.event === "missing_score") state.unscoredConsecutiveTurns++;
-  if (entry.event === "delegation_pending") state.unscoredConsecutiveTurns = 0;
+  if (entry.event === "missing_score") {
+    state.unscoredConsecutiveTurns++;
+    state.pendingFeedbackTurn = {
+      run: entry.run ?? state.currentRun,
+      turn: entry.turn ?? state.turnsStarted,
+      globalTurn: entry.globalTurn ?? entry.turn ?? state.totalTurnsStarted,
+    };
+  }
+  if (entry.event === "delegation_pending") {
+    state.unscoredConsecutiveTurns = 0;
+    state.pendingFeedbackTurn = null;
+  }
   if (entry.event === "premature_stop") state.prematureStopCount++;
   if (entry.event === "ace_run_started" || entry.event === "ace_run_completed" || entry.event === "ace_run_failed" || entry.event === "ace_run_skipped") recordAceRun(state, entry);
   if (entry.event === "stopped" || entry.event === "cleared" || entry.event === "limit_reached") state.stopReason = entry.reason ?? entry.event;

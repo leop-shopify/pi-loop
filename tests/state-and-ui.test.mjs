@@ -280,29 +280,39 @@ test("loop widget renders a passive side-panel dashboard with data, prompt, and 
   assert.equal(lines.every((line) => visibleWidth(line) <= 52), true);
 });
 
-test("loop widget step history tracks emitted pi-loop step messages", () => {
+test("loop widget step history repeats turn lifecycle without restarting setup", () => {
   const state = createLoopState();
   startLoopState(state, {
-    goal: "track emitted loop steps",
+    goal: "track cumulative loop steps",
     targetScore: 90,
-    maxTurns: 12,
+    maxTurns: 3,
     maxMinutes: 10,
     startedAt: Date.now(),
   });
-  state.stepHistory = [
-    { step: "feedback", detail: "baseline recorded", run: 1, turn: 1, globalTurn: 1, timestamp: 1 },
-    { step: "review loop", detail: "loop 1, turn 1/12, total 1/12", run: 1, turn: 1, globalTurn: 1, timestamp: 2 },
-    { step: "continuing loop", detail: "scheduled refined prompt", run: 1, turn: 1, globalTurn: 1, timestamp: 3 },
-    { step: "starting agent work", detail: "loop 1, turn 2/12, total 2/12", run: 1, turn: 2, globalTurn: 2, timestamp: 4 },
-  ];
+  state.totalTurnsStarted = 2;
+  state.turnsStarted = 2;
+  state.results.push(progressEntry(1, null));
+  state.currentTurnStartedAt = Date.now();
 
-  const text = renderLoopWidget(state, 64, plainTheme, 80).join("\n");
+  const text = renderLoopWidget(state, 72, plainTheme, 80).join("\n");
 
-  assert.match(text, /feedback\s+r1t1 - baseline recorded/);
-  assert.match(text, /review loop\s+r1t1 - loop 1, turn 1\/12/);
-  assert.match(text, /continuing loop\s+r1t1 - scheduled refined prompt/);
-  assert.match(text, /starting agent work\s+r1t2 - loop 1, turn 2\/12/);
-  assert.doesNotMatch(text, /> 09 now\s+agent work/);
+  assert.match(text, / 01 done\s+parse config/);
+  assert.match(text, / 02 done\s+capture context/);
+  assert.match(text, / 03 done\s+bounded research/);
+  assert.match(text, / 04 done\s+persist log/);
+  assert.match(text, / 05 done\s+enable feedback/);
+  assert.match(text, / 06 done\s+kickoff prompt/);
+  assert.match(text, / 07 done\s+inject guardrails/);
+  assert.match(text, / 08 done\s+start turn/);
+  assert.match(text, / 09 done\s+agent work/);
+  assert.match(text, / 10 done\s+measure progress/);
+  assert.match(text, / 11 done\s+feedback/);
+  assert.match(text, / 12 done\s+start turn/);
+  assert.match(text, /> 13 now\s+agent work/);
+  assert.match(text, /\. 14 next\s+measure progress/);
+  assert.match(text, /\. 15 next\s+feedback/);
+  assert.match(text, /\. 16 next\s+finishing pi/);
+  assert.doesNotMatch(text, / 12 .*parse config/);
 });
 
 test("loop widget summarizes the current prompt as a useful plan", () => {
@@ -454,7 +464,7 @@ test("stale current-turn score cannot override active agent work", () => {
 
   assert.deepEqual(rows.filter((step) => step.status === "active").map((step) => step.label), ["agent work"]);
   assert.equal(rows.find((step) => step.label === "resume or stop").status, "waiting");
-  assert.match(historyText, /> 09 now\s+agent work/);
+  assert.match(historyText, /> \d+ now\s+agent work/);
   assert.doesNotMatch(historyText, /> .*resume or stop/);
 });
 
@@ -505,10 +515,11 @@ test("loop widget shows the full runtime step history in the expanded panel", ()
   const narrowLines = renderLoopWidget(state, 40, plainTheme);
   const historyLines = narrowLines.filter((line) => /[>. ]\s*\d{2}\s+(done|now|next)\b/.test(line));
 
-  assert.equal(historyLines.length, 13);
+  assert.equal(historyLines.length, 16);
   assert.match(narrowLines.join("\n"), /start turn/);
   assert.match(narrowLines.join("\n"), /agent work/);
-  assert.match(narrowLines.join("\n"), /> 12 now\s+resume or stop/);
+  assert.match(narrowLines.join("\n"), /\. 12 next\s+start turn/);
+  assert.match(narrowLines.join("\n"), /\. 16 next\s+finishing pi/);
   assert.equal(narrowLines.every((line) => visibleWidth(line) <= 40), true);
 });
 

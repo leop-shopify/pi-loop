@@ -62,9 +62,11 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
         targetScore: state.targetScore,
       }, undefined, { cwd: ctx.cwd });
       const nextActions = feedback.nextActions?.length ? refineNextActions(feedback.nextActions) : result.nextActions;
-      const entry = scoreEntryFromResult(Math.max(1, state.turnsStarted), scoreInput.summary, { ...result, nextActions }, scoreInput.attempt, state.currentRun, Math.max(1, state.totalTurnsStarted));
+      const feedbackTurn = state.pendingFeedbackTurn ?? { run: state.currentRun, turn: Math.max(1, state.turnsStarted), globalTurn: Math.max(1, state.totalTurnsStarted) };
+      const entry = scoreEntryFromResult(feedbackTurn.turn, scoreInput.summary, { ...result, nextActions }, scoreInput.attempt, feedbackTurn.run, feedbackTurn.globalTurn);
       state.results.push(entry);
       state.unscoredConsecutiveTurns = 0;
+      state.pendingFeedbackTurn = null;
       appendLogEntry(ctx.cwd, entry);
       updateAfterScore(ctx, state);
       sendLoopStepMessage(pi, state, "feedback", formatProgressPercent(result.progressPercent), ctx.cwd);

@@ -28,6 +28,7 @@ export function startNextRun(state: LoopRuntimeState, now: number = Date.now()):
   state.turnsStarted = 0;
   state.lastAgentStartScoreCount = state.results.length;
   state.unscoredConsecutiveTurns = 0;
+  state.pendingFeedbackTurn = null;
   state.runs.push({ index: state.currentRun, startedAt: now, turnsStarted: 0 });
 }
 

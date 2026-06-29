@@ -115,6 +115,7 @@ function clearLoop(state: Parameters<typeof stopLoop>[0]): void {
   state.currentTurnStartedAt = null;
   state.lastTurnDurationMs = null;
   state.turnDurations = [];
+  state.pendingFeedbackTurn = null;
   state.contextUsage = null;
   state.stepHistory = [];
   state.aceRun = null;

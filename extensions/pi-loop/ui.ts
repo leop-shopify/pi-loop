@@ -3,14 +3,12 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 
 import { hideFloatingPanel, showFloatingPanel } from "./floating-panel.ts";
 import { bestProgressEntry, formatProgressPercent, progressBarPercent } from "./progress.ts";
-import { runtimeStepHistoryRows, type RuntimeStepRow } from "./runtime-steps.ts";
-import { elapsedMs, lastScore, type LoopRuntimeState, type LoopStepHistoryEntry } from "./state.ts";
+import type { RuntimeStepRow } from "./runtime-steps.ts";
+import { elapsedMs, lastScore, type LoopRuntimeState } from "./state.ts";
 
 const PANEL_KEY = "pi-loop";
 const MIN_PROMPT_LINE_LIMIT = 15;
 const SECTION_FRAME_ROWS = 2;
-const STEP_HISTORY_PREVIOUS_ROWS = 15;
-const STEP_HISTORY_NEXT_ROWS = 15;
 const STEP_HISTORY_LINE_LIMIT = 30;
 
 export function formatElapsed(ms: number): string {
@@ -206,32 +204,84 @@ function sectionRowCount(lineCount: number): number {
 }
 
 function stepHistoryLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
-  const actualSteps = state.stepHistory ?? [];
-  if (actualSteps.length > 0) {
-    return actualSteps
-      .slice(-STEP_HISTORY_LINE_LIMIT)
-      .map((step, index, visibleSteps) => renderRecordedStep(step, actualSteps.length - visibleSteps.length + index + 1, width, theme));
-  }
-
-  return runtimeStepHistoryRows(state, STEP_HISTORY_PREVIOUS_ROWS, STEP_HISTORY_NEXT_ROWS)
-    .slice(0, STEP_HISTORY_LINE_LIMIT)
+  return cumulativeStepHistoryRows(state)
+    .slice(-STEP_HISTORY_LINE_LIMIT)
     .map((step) => renderHistoryStep(step, width, theme));
 }
 
-function renderRecordedStep(step: LoopStepHistoryEntry, index: number, width: number, theme: Theme): string {
-  const prefix = `${String(index).padStart(2, "0")} `;
-  const turn = step.globalTurn > 0 ? `r${step.run}t${step.turn}` : `r${step.run}`;
-  const label = truncateToWidth(step.step, 22, "…", true);
-  const detail = step.detail ? ` - ${step.detail}` : "";
-  const suffix = ` ${turn}${detail}`;
-  return truncateToWidth(theme.fg("muted", prefix) + theme.fg("warning", label) + theme.fg("dim", suffix), width, "…", true);
+function cumulativeStepHistoryRows(state: LoopRuntimeState): RuntimeStepRow[] {
+  const rows: RuntimeStepRow[] = [];
+  let index = 1;
+  const push = (label: string, status: RuntimeStepRow["status"], detail: string): void => {
+    rows.push({ index: index++, label, status, detail });
+  };
+
+  const hasConfig = state.startedAt !== null && state.goal !== null;
+  const setupStatus: RuntimeStepRow["status"] = hasConfig ? "done" : state.active ? "active" : "waiting";
+  push("parse config", setupStatus, state.goal ? `${state.maxTurns} turns, ${state.maxMinutes}m, ${state.maxRuns} run(s)` : "waiting for /loop goal");
+  push("capture context", setupStatus, state.targetContext ? `${state.targetContext.checks.length} checks` : "snapshot unavailable");
+  push("bounded research", setupStatus, "research lanes bounded by the loop cap");
+  push("persist log", setupStatus, "config and events persisted");
+  push("enable feedback", setupStatus, state.active ? "loop_feedback available" : "loop_feedback disabled");
+  push("kickoff prompt", setupStatus, "initial loop instructions sent");
+  push("inject guardrails", state.totalTurnsStarted > 0 ? "done" : "waiting", "goal, limits, hard rules, required evidence");
+
+  const renderedTurnCount = turnRowsToRender(state);
+  for (let globalTurn = 1; globalTurn <= renderedTurnCount; globalTurn++) {
+    const coordinates = turnCoordinates(state, globalTurn);
+    const detail = loopDetail(coordinates.run, coordinates.turn, globalTurn, state);
+    const activeAgent = state.currentTurnStartedAt !== null && globalTurn === state.totalTurnsStarted;
+    const scored = !activeAgent && turnScored(state, coordinates.run, coordinates.turn, globalTurn);
+    const pendingFeedback = state.pendingFeedbackTurn?.globalTurn === globalTurn;
+    const started = globalTurn <= state.totalTurnsStarted;
+    const completedPastTurn = globalTurn < state.totalTurnsStarted;
+    const future = !started;
+
+    push("start turn", future ? "waiting" : "done", detail);
+    push("agent work", future ? "waiting" : activeAgent ? "active" : "done", activeAgent ? "work in progress" : detail);
+    push("measure progress", future || activeAgent ? "waiting" : scored || pendingFeedback || completedPastTurn ? "done" : "active", scored ? "feedback recorded" : pendingFeedback ? "ready for loop_feedback" : "waiting for loop_feedback");
+    push("feedback", future ? "waiting" : scored || completedPastTurn ? "done" : pendingFeedback ? "active" : "waiting", scored || completedPastTurn ? "checkpoint recorded" : detail);
+  }
+
+  push("finishing pi-loop", finishingStepStatus(state), state.stopReason ?? "time, turn, run, and feedback checks");
+  return rows;
+}
+
+function turnRowsToRender(state: LoopRuntimeState): number {
+  if (state.totalTurnsStarted === 0) return 1;
+  const last = lastScore(state);
+  const currentTurnScored = state.currentTurnStartedAt === null && last !== null && (last.globalTurn ?? last.turn) >= state.totalTurnsStarted;
+  if (state.active && currentTurnScored && state.turnsStarted < state.maxTurns) return state.totalTurnsStarted + 1;
+  return state.totalTurnsStarted;
+}
+
+function turnCoordinates(state: LoopRuntimeState, globalTurn: number): { run: number; turn: number } {
+  const scored = state.results.find((entry) => (entry.globalTurn ?? entry.turn) === globalTurn);
+  if (scored) return { run: scored.run ?? 1, turn: scored.turn };
+  if (state.pendingFeedbackTurn?.globalTurn === globalTurn) return { run: state.pendingFeedbackTurn.run, turn: state.pendingFeedbackTurn.turn };
+  if (globalTurn === state.totalTurnsStarted) return { run: state.currentRun, turn: Math.max(1, state.turnsStarted) };
+  return { run: state.currentRun, turn: globalTurn };
+}
+
+function turnScored(state: LoopRuntimeState, run: number, turn: number, globalTurn: number): boolean {
+  return state.results.some((entry) => (entry.run ?? 1) === run && entry.turn === turn && (entry.globalTurn ?? entry.turn) === globalTurn);
+}
+
+function finishingStepStatus(state: LoopRuntimeState): RuntimeStepRow["status"] {
+  if (!state.active && state.stopReason) return "done";
+  if (state.active && state.turnsStarted >= state.maxTurns && state.currentTurnStartedAt === null && lastScore(state) !== null) return "active";
+  return "waiting";
+}
+
+function loopDetail(run: number, turn: number, globalTurn: number, state: LoopRuntimeState): string {
+  return `loop ${run}, turn ${turn}/${state.maxTurns}, total ${globalTurn}/${state.maxRuns * state.maxTurns}`;
 }
 
 function renderHistoryStep(step: RuntimeStepRow, width: number, theme: Theme): string {
   const marker = step.status === "active" ? ">" : step.status === "done" ? " " : ".";
   const status = step.status === "active" ? "now" : step.status === "done" ? "done" : "next";
   const prefix = `${marker} ${String(step.index).padStart(2, "0")} ${pad(status, 5)} `;
-  const label = truncateToWidth(step.label, 16, "…", true);
+  const label = truncateToWidth(step.label, 18, "…", true);
   const detailWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(label) - 3);
   const color = step.status === "active" ? "warning" : step.status === "done" ? "success" : "dim";
   return truncateToWidth(theme.fg(color, prefix) + theme.fg("muted", label) + theme.fg("dim", ` - ${truncateToWidth(step.detail, detailWidth, "…", true)}`), width, "…", true);

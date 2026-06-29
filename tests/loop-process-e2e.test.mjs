@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import piLoopExtension from "../extensions/pi-loop/index.ts";
+import { RESUME_DELAY_MS } from "../extensions/pi-loop/constants.ts";
 import { deleteLog, readLogEntries } from "../extensions/pi-loop/log.ts";
 
 async function withTempDir(fn) {
@@ -48,6 +49,9 @@ test("loop process treats lightweight feedback as progress and stops only at the
     assert.equal(pi.activeTools.includes("loop_feedback"), true);
     assert.ok(pi.stepMessages.some((message) => message.content.startsWith("Step: feedback — baseline recorded")));
     assert.ok(pi.stepMessages.some((message) => message.content === "Step: review loop — loop 1, turn 1/2, total 1/2"));
+    await sleep(RESUME_DELAY_MS + 20);
+    assert.match(pi.sentMessages.at(-1).text, /^Continue the pi-loop workflow/);
+    assert.doesNotMatch(pi.sentMessages.at(-1).text, /^Start the pi-loop workflow/);
 
     await pi.events.get("agent_start")({}, ctx);
     recordBashCheck(ctx, "pnpm test", "tests passed");
@@ -90,6 +94,43 @@ test("loop process treats lightweight feedback as progress and stops only at the
     assert.match(finalMessage, /Loop steps:/);
     assert.match(finalMessage, /run 1, turn 1/);
     assert.match(finalMessage, /run 1, turn 2/);
+  });
+});
+
+test("missing-feedback recovery records feedback without counting a new loop turn", async () => {
+  await withTempDir(async (dir) => {
+    writeProject(dir);
+
+    const pi = mockPi();
+    const ctx = mockContext(dir);
+    piLoopExtension(pi);
+
+    await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=3 --target=90", ctx);
+    await pi.events.get("agent_start")({}, ctx);
+    recordBashCheck(ctx, "pnpm test", "tests passed");
+    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Need to record feedback." }] }, ctx);
+
+    let processEntries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
+    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1]);
+    assert.equal(processEntries.at(-1).event, "missing_score");
+
+    await pi.events.get("agent_start")({}, ctx);
+    const recoveryResponse = await pi.tools.get("loop_feedback").execute("feedback-recovery", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
+    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Feedback recorded." }] }, ctx);
+
+    assert.equal(recoveryResponse.terminate, true);
+    assert.ok(pi.stepMessages.some((message) => message.content === "Step: recording feedback — loop 1, turn 1/3, total 1/3"));
+
+    processEntries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
+    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1]);
+    const scores = processEntries.filter((entry) => entry.type === "score");
+    assert.equal(scores.length, 1);
+    assert.equal(scores[0].turn, 1);
+    assert.equal(scores[0].globalTurn, 1);
+
+    await pi.events.get("agent_start")({}, ctx);
+    processEntries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
+    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1, 2]);
   });
 });
 
@@ -219,6 +260,10 @@ function feedbackParams() {
     notes: "source behavior is ready for final refinement",
     nextActions: ["carry any leftovers into the next attempt"],
   };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function recordBashCheck(ctx, command, text, exitCode = 0) {
