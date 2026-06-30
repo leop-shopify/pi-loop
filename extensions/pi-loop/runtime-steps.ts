@@ -1,7 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-import type { LoopRuntimeState, LoopScoreEntry } from "./state.ts";
+import { acceptanceReadyTurn, normalTotalTurnsStarted, normalTurnsStarted, normalWorkStarted, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
 
 export interface RuntimeStepRow {
   index: number;
@@ -23,12 +23,17 @@ export function runtimeStepRows(state: LoopRuntimeState): RuntimeStepRow[] {
   const hasContext = state.targetContext !== null;
   const hasTurn = state.totalTurnsStarted > 0;
   const last = state.results.at(-1);
-  const agentWorkActive = state.active && hasTurn && state.currentTurnStartedAt !== null;
-  const currentTurnScored = !agentWorkActive && last !== undefined && (last.globalTurn ?? last.turn) >= state.totalTurnsStarted;
-  const hasScore = state.results.length > 0;
+  const readyTurn = acceptanceReadyTurn(state);
+  const acceptanceReady = readyTurn !== null;
+  const hasNormalWork = normalWorkStarted(state);
+  const normalLast = acceptanceReady ? state.results.filter((entry) => (entry.globalTurn ?? entry.turn) > readyTurn).at(-1) : undefined;
+  const acceptancePlanningActive = state.active && hasTurn && !acceptanceReady;
+  const agentWorkActive = state.active && hasNormalWork && state.currentTurnStartedAt !== null;
+  const currentTurnScored = !agentWorkActive && normalLast !== undefined && (normalLast.globalTurn ?? normalLast.turn) >= state.totalTurnsStarted;
+  const hasScore = normalLast !== undefined;
   const done = !state.active && hasConfig;
-  const agentWorkComplete = !agentWorkActive && (currentTurnScored || done || (hasTurn && state.currentTurnStartedAt === null));
-  const measureProgressActive = state.active && hasTurn && !currentTurnScored && agentWorkComplete;
+  const agentWorkComplete = hasNormalWork && !agentWorkActive && (currentTurnScored || done || state.currentTurnStartedAt === null);
+  const measureProgressActive = state.active && hasNormalWork && !currentTurnScored && agentWorkComplete;
   const resumeOrStopActive = state.active && currentTurnScored && hasScore;
 
   return finalizeRuntimeRows([
@@ -37,14 +42,15 @@ export function runtimeStepRows(state: LoopRuntimeState): RuntimeStepRow[] {
     row(3, "bounded research", hasContext, state.active && !hasTurn, "spawned agents report before the 10m cap; partial findings carry forward"),
     row(4, "persist log", hasConfig, state.active, "~/.pi/agent/pi-loop/projects/.../log.jsonl config entry"),
     row(5, "enable feedback", hasConfig, state.active, state.active ? "loop_feedback available" : "loop_feedback disabled"),
-    row(6, "kickoff prompt", hasConfig, state.active && !hasTurn, "analysis, files, acceptance criteria, verification"),
+    row(6, "kickoff prompt", hasConfig, state.active && !hasTurn, "acceptance discovery, user confirmation, trackable plan"),
     row(7, "inject guardrails", hasTurn, state.active && hasTurn, "goal, limits, hard rules, required evidence"),
-    row(8, "start turn", hasTurn, state.active && hasTurn, `turn ${state.turnsStarted}/${state.maxTurns}, total ${state.totalTurnsStarted}`),
-    row(9, "agent work", agentWorkComplete, agentWorkActive, currentTurnScored ? "feedback recorded" : measureProgressActive ? "ready for loop_feedback" : agentWorkComplete ? "work ended" : "work in progress"),
-    row(10, "measure progress", currentTurnScored, measureProgressActive, currentTurnScored && last ? progressDetail(last) : "waiting for loop_feedback"),
-    row(11, "feedback", hasScore, state.active && hasScore, feedbackDetail(state)),
-    row(12, "resume or stop", done, resumeOrStopActive, state.stopReason ?? "feedback, budget, and stop-limit check"),
-    row(13, "reconstruct", hasConfig, false, "state can resume from the log"),
+    row(8, "plan acceptance", acceptanceReady, acceptancePlanningActive, acceptanceDetail(state)),
+    row(9, "start turn", hasNormalWork, state.active && acceptanceReady && !hasNormalWork, hasNormalWork ? `turn ${normalTurnsStarted(state)}/${state.maxTurns}, total ${normalTotalTurnsStarted(state)}` : "waiting for clear, confirmed, trackable acceptance criteria"),
+    row(10, "agent work", agentWorkComplete, agentWorkActive, currentTurnScored ? "feedback recorded" : measureProgressActive ? "ready for loop_feedback" : agentWorkComplete ? "work ended" : "work in progress"),
+    row(11, "measure progress", currentTurnScored, measureProgressActive, currentTurnScored && normalLast ? progressDetail(normalLast) : "waiting for loop_feedback"),
+    row(12, "feedback", hasScore, state.active && hasScore, feedbackDetail(state)),
+    row(13, "resume or stop", done, resumeOrStopActive, state.stopReason ?? "feedback, budget, and stop-limit check"),
+    row(14, "reconstruct", hasConfig, false, "state can resume from the log"),
   ], state.active);
 }
 
@@ -133,6 +139,16 @@ function contextDetail(state: LoopRuntimeState): string {
   if (!context) return "waiting for snapshot";
   const git = context.baseline.git?.branch ? `, git ${context.baseline.git.branch}` : "";
   return `${context.baseline.packageManager ?? "unknown"}${git}, ${context.checks.length} checks`;
+}
+
+function acceptanceDetail(state: LoopRuntimeState): string {
+  const readyTurn = acceptanceReadyTurn(state);
+  if (readyTurn !== null) return `criteria confirmed with trackable plan at turn ${readyTurn}`;
+  const status = state.results.at(-1)?.attempt?.acceptanceStatus;
+  if (status === "proposed") return "candidate criteria proposed; waiting for user confirmation";
+  if (status === "discovering") return "discovering criteria through questions or research";
+  if (status === "missing") return "criteria missing; ask contextual discovery questions";
+  return "planning clear, confirmed, trackable acceptance criteria";
 }
 
 function progressDetail(entry: LoopScoreEntry): string {

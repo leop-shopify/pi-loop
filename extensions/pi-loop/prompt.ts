@@ -2,7 +2,7 @@ import { formatFeedbackHistory } from "./feedback-history.ts";
 import { refineNextActions } from "./feedback-refinement.ts";
 import { runBudgetText } from "./run-manager.ts";
 import { scoringRubricSummary } from "./scoring-heuristics.ts";
-import type { LoopRuntimeState, LoopScoreEntry } from "./state.ts";
+import { acceptanceReady, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
 import { formatTargetContext } from "./target-context.ts";
 
 export interface LoopPromptOptions {
@@ -12,19 +12,21 @@ export interface LoopPromptOptions {
 export function kickoffPrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
   return [
     `Start the pi-loop workflow for this goal: ${state.goal ?? ""}`,
-    "First analyze the problem, files likely involved, acceptance criteria, verification strategy, and whether scoped research or delegation is needed.",
+    acceptanceCriteriaGateInstruction(),
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
     promptAceContext(options),
     boundedResearchDelegationInstruction(),
-    "Then implement or investigate using any Pi tools that are useful.",
+    "Then implement or investigate using any Pi tools that are useful only after the user-confirmed acceptance criteria exist and the current plan has trackable tasks.",
     "Keep this attempt short: complete a verifiable slice within the loop cap and move unfinished tasks or research gaps to the next feedback attempt.",
-    "At the end of this turn, call loop_feedback with only a tiny summary/status/notes checkpoint. Do not put verification matrices, design rubrics, Rails safety, artifacts, or audit dumps in the feedback tool; run that work during the loop or final refinement instead.",
+    "During acceptance discovery, do not call loop_feedback after each question or partial user answer. Keep asking focused questions in this same turn until the user explicitly confirms criteria and you can record a trackable planTasks list; then call loop_feedback once with acceptanceStatus: \"confirmed\", acceptanceCriteria, and planTasks. Do not put verification matrices, design rubrics, Rails safety, artifacts, or audit dumps in the feedback tool; run that work during the loop or final refinement instead.",
     "Do not claim completion without recording feedback.",
     scoringRubricSummary(),
   ].join("\n\n");
 }
 
 export function continuePrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
+  if (!acceptanceReady(state)) return acceptancePlanningPrompt(state, options);
+
   const last = state.results[state.results.length - 1];
   const scoreLine = last ? `Last progress: ${formatProgress(last.progressPercent ?? null)}.` : "No baseline has been recorded yet; the first loop_feedback call records it.";
   const nextActions = last?.nextActions.length ? `Next actions from feedback scorer:\n${refineNextActions(last.nextActions).map((action) => `- ${action}`).join("\n")}` : "Next action: produce concrete evidence and record a loop_feedback checkpoint.";
@@ -36,15 +38,33 @@ export function continuePrompt(state: LoopRuntimeState, options: LoopPromptOptio
     scoreLine,
     refinementObservation(state),
     formatFeedbackHistory(state),
+    planStateForPrompt(state),
     promptAceContext(options),
     blockers,
     reviewGateGuidance(state),
     nextActions,
+    planGuidedNextPromptInstruction(state),
     `Budget: ${runBudgetText(state)}.`,
     boundedResearchDelegationInstruction(),
     "Strategy rule: use ACE context and feedback-scoring output to choose a different, verifiable slice. Do not repeat the same plan, evidence, or checks unless you explain why reuse is necessary.",
     "Progress is feedback only; verify one slice, record loop_feedback, and carry unfinished work or partial research into the next feedback attempt.",
-    "At the end of this turn, call loop_feedback with a tiny summary/status/notes checkpoint. Keep hardening, verification, and audit work in normal loop actions or final refinement, not in the feedback tool input.",
+    "At the end of this turn, call loop_feedback with a focused summary/status/notes checkpoint plus acceptanceStatus, acceptanceCriteria, and planTasks when available. Keep hardening, verification, and audit work in normal loop actions or final refinement, not in the feedback tool input.",
+  ].join("\n\n");
+}
+
+function acceptancePlanningPrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
+  const last = state.results[state.results.length - 1];
+  const nextActions = last?.nextActions.length ? `Next actions from acceptance scorer:\n${refineNextActions(last.nextActions).map((action) => `- ${action}`).join("\n")}` : "Next action: make acceptance criteria clear, confirmed, and trackable before starting agent work.";
+  return [
+    "Continue the mandatory acceptance-planning step. Do not start normal agent work yet.",
+    `Goal: ${state.goal ?? ""}`,
+    planStateForPrompt(state),
+    promptAceContext(options),
+    last?.blockers.length ? `Acceptance blockers:\n${last.blockers.map((blocker) => `- ${blocker.severity}: ${blocker.message}`).join("\n")}` : "Acceptance blockers: acceptance criteria are not ready for normal work yet.",
+    nextActions,
+    "Hard gate: no implementation, testing loop, progress optimization, or arbitrary next-turn selection starts until acceptanceStatus is confirmed and acceptanceCriteria plus planTasks are recorded.",
+    "If user input is needed, ask only acceptance-planning questions. If research is needed, use bounded research to produce candidate criteria/options for user confirmation.",
+    "Do not call loop_feedback for missing, discovering, or proposed criteria just because the user answered one question. Keep using ask_user or bounded research in this same turn until the user explicitly confirms clear criteria and you can record concrete planTasks. Then call loop_feedback once with acceptanceStatus: \"confirmed\", acceptanceCriteria, and planTasks. If you are truly blocked and cannot ask/research further, report the blocker in prose instead of scoring the discovery turn.",
   ].join("\n\n");
 }
 
@@ -55,7 +75,7 @@ export function missingScorePrompt(state: LoopRuntimeState, claimedCompletion = 
     `Goal: ${state.goal ?? ""}`,
     `Budget: ${runBudgetText(state)}.`,
     "If spawned agents or data collection are involved, do not treat delegation itself as evidence: use completed reports, concrete partial findings, or an honest missing-evidence note only.",
-    "Call loop_feedback now with a tiny summary/status/notes checkpoint. Do not expand it into a verification report; missing checks belong in notes or next actions for the next/refinement step.",
+    "Call loop_feedback now with a focused summary/status/notes checkpoint plus acceptanceStatus, acceptanceCriteria, and planTasks when available. Do not expand it into a verification report; missing checks belong in notes or next actions for the next/refinement step.",
   ].join("\n\n");
 }
 
@@ -65,7 +85,7 @@ export function delegationPendingPrompt(state: LoopRuntimeState): string {
     `Goal: ${state.goal ?? ""}`,
     `Budget: ${runBudgetText(state)}.`,
     "Wait for focused agent reports instead of forcing a score. If there is independent lead-owned work that does not duplicate agent scope, do that in the next user/extension wake-up; otherwise let the team report first.",
-    "When reports arrive, synthesize the evidence, verify one concrete slice, then call loop_feedback with a tiny checkpoint. Near the loop cap, request partial reports and list missing pieces as next actions.",
+    "When reports arrive, synthesize the evidence, verify one concrete slice, then call loop_feedback with a focused checkpoint plus acceptanceStatus, acceptanceCriteria, and planTasks when available. Near the loop cap, request partial reports and list missing pieces as next actions.",
   ].join("\n\n");
 }
 
@@ -76,10 +96,11 @@ export function nextRunPrompt(state: LoopRuntimeState, options: LoopPromptOption
     refinementObservation(state),
     `Budget: ${runBudgetText(state)}.`,
     formatFeedbackHistory(state),
+    planStateForPrompt(state),
     promptAceContext(options),
     reviewGateGuidance(state),
     boundedResearchDelegationInstruction(),
-    "Use ACE context plus prior feedback to choose a genuinely different short plan. Call loop_feedback at the end of the turn with only a tiny summary/status/notes checkpoint.",
+    "Use ACE context plus prior feedback to choose a genuinely different short plan. Call loop_feedback at the end of the turn with only a focused summary/status/notes checkpoint plus acceptanceStatus, acceptanceCriteria, and planTasks when available.",
   ].join("\n\n");
 }
 
@@ -89,15 +110,76 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
     `Goal: ${state.goal ?? ""}`,
     `Limits: ${state.maxMinutes} minutes, ${state.maxTurns} turns per run, and ${state.maxRuns} run(s). Defaults are 10 minutes, 12 turns, and 1 run unless the user configured otherwise; minutes are capped at 10.`,
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
+    acceptanceInstructionForCurrentState(state),
     boundedResearchDelegationInstruction(),
-    "A loop turn starts when the agent begins work and ends when it records a tiny loop_feedback checkpoint. The extension treats the first feedback turn as a hidden baseline and keeps using feedback until a configured limit or user stop is reached.",
+    "A loop turn starts when the agent begins work and ends when it records a focused loop_feedback checkpoint. The extension treats the first feedback turn as a hidden baseline and keeps using feedback until a configured limit or user stop is reached.",
     "You may use any active Pi tools needed to solve the goal. The extension does not sandbox your tool choices, so be disciplined and produce evidence.",
     "You must call loop_feedback before presenting a completion claim.",
-    "Keep loop_feedback tiny. Do not use it as a massive verification, artifact, design, Rails, or audit report; those checks happen during normal work or final refinement.",
+    "Keep loop_feedback focused. Before acceptance is confirmed, do not call it for missing/discovering/proposed criteria or partial ask_user answers. After the gate is open, use acceptanceStatus, acceptanceCriteria, and planTasks for compact loop state, not as a massive verification, artifact, design, Rails, or audit report; those checks happen during normal work or final refinement.",
     "Hard rules for the work itself: map requirements, use real passed checks when changing executable code, assert observable behavior, do not use mock-only or implementation-coupled tests, do not mock owned code, keep responsibilities split, avoid god files, and apply framework-specific safety when Rails or similar framework code is involved.",
     "Loop pacing: finish a verifiable slice within the 10-minute cap; spawned agents and data collection are useful but stay inside that cap, with partial results carried to the next feedback attempt.",
     scoringRubricSummary(),
   ].join("\n");
+}
+
+function acceptanceCriteriaGateInstruction(): string {
+  return [
+    "First /loop step: run acceptance discovery before implementation.",
+    "- The agent must decide whether acceptance criteria are present, user-confirmed, and sufficient for a plan. Do not rely on command parsing or treat bullets in the prompt as automatically enough.",
+    "- User-provided acceptance bullets are strong signals, but the agent may still say they are insufficient, ambiguous, too high-level, or missing critical context; then mark acceptanceStatus as proposed/discovering and ask or research before planning.",
+    "- Do not treat agent-invented criteria as final. Candidate criteria from the agent or spawned research must go back to the user for selection, editing, or rejection.",
+    "- If the goal is vague, ask contextual discovery questions instead of asking generically for 'acceptance criteria'. Example: for '/loop lets build a house', ask whether the user owns land, starts from zero or renovation, needs foundation/plans/permits/appliances, budget/timeline/location constraints, and what outcome this loop should produce.",
+    "- If the user says they do not know, use bounded research/delegation to bring back candidate paths, tradeoffs, and candidate acceptance criteria for the user to select, edit, or reject.",
+    "- Only after the agent judges the user-confirmed criteria sufficient, build or update a trackable plan with task statuses (pending, in_progress, completed, blocked).",
+    "- Do not call loop_feedback after every discovery question or partial answer. Use loop_feedback only once acceptanceStatus is confirmed with acceptanceCriteria and planTasks, or later during normal work after the acceptance gate is open.",
+  ].join("\n");
+}
+
+function planStateForPrompt(state: LoopRuntimeState): string {
+  const lastAttempt = state.results.at(-1)?.attempt;
+  const acceptanceStatus = lastAttempt?.acceptanceStatus ?? "missing";
+  const criteria = lastAttempt?.acceptanceCriteria?.filter(Boolean) ?? [];
+  const tasks = lastAttempt?.planTasks?.filter((task) => task.title?.trim()) ?? [];
+
+  if (acceptanceReady(state) && state.results[0]?.attempt?.acceptanceStatus === undefined && acceptanceStatus !== "confirmed") {
+    return [
+      "Acceptance/plan state:",
+      "- Acceptance gate is open from legacy pre-upgrade feedback history; no structured acceptance metadata was recorded in that older log.",
+      "- Continue normal loop work from the prior feedback instead of restarting acceptance discovery.",
+    ].join("\n");
+  }
+
+  if (criteria.length === 0 && tasks.length === 0) {
+    return [
+      "Acceptance/plan state:",
+      "- Acceptance status: missing.",
+      "- No user-confirmed acceptance criteria or trackable plan tasks were recorded yet.",
+      "- First action: run acceptance discovery. Ask contextual questions or research candidate options; do not build the implementation plan until the user confirms criteria.",
+    ].join("\n");
+  }
+
+  return [
+    "Acceptance/plan state:",
+    `- Acceptance status: ${acceptanceStatus}.`,
+    ...(criteria.length ? ["Acceptance criteria or candidates:", ...criteria.map((criterion, index) => `- AC${index + 1}: ${criterion}`)] : ["- Acceptance criteria still missing; discover them with the user before implementation."]),
+    ...(acceptanceStatus === "confirmed" && tasks.length ? ["Trackable tasks:", ...tasks.map((task) => `- ${task.id ? `${task.id}: ` : ""}${task.title} [${task.status}]${task.evidence ? ` — ${task.evidence}` : ""}`)] : acceptanceStatus === "confirmed" ? ["- Trackable tasks still missing; build the plan from confirmed criteria before implementation."] : ["- Trackable tasks are intentionally deferred until the user confirms acceptance criteria."]),
+  ].join("\n");
+}
+
+function planGuidedNextPromptInstruction(state: LoopRuntimeState): string {
+  if (acceptanceIsConfirmed(state)) {
+    return "Plan-guided next prompt rule: acceptance criteria are already confirmed. Do not re-run acceptance discovery or ask the user to choose the next turn unless a new blocker truly requires input. Continue the next in_progress, blocked, or pending plan task and update planTasks statuses in loop_feedback.";
+  }
+  return "Plan-guided next prompt rule: if acceptanceStatus is missing/discovering/proposed, the next prompt must ask contextual questions, research options, or ask the user to select/confirm criteria before agentic implementation starts.";
+}
+
+function acceptanceInstructionForCurrentState(state: LoopRuntimeState): string {
+  if (!acceptanceIsConfirmed(state)) return acceptanceCriteriaGateInstruction();
+  return "Acceptance criteria are already confirmed for this loop. Do not repeat the acceptance-discovery step and do not ask the user to reconfirm or choose the next turn unless a new blocker makes input necessary. Continue the approved plan with normal agentic work and update planTasks through loop_feedback.";
+}
+
+function acceptanceIsConfirmed(state: LoopRuntimeState): boolean {
+  return acceptanceReady(state);
 }
 
 function promptAceContext(options: LoopPromptOptions): string | undefined {
@@ -105,7 +187,7 @@ function promptAceContext(options: LoopPromptOptions): string | undefined {
 }
 
 function boundedResearchDelegationInstruction(): string {
-  return "Bounded research/delegation rule: spawned research agents are allowed and valuable when they can return useful evidence inside the loop cap, but delegation itself is not progress evidence. Keep the lead responsible for decomposition, synthesis, verification, and loop_feedback. When independent questions exist, prefer several small read-only research/review lanes over one broad \"do the whole goal\" agent; each spawned agent needs a narrow question, concrete files or search targets, a report shape, and an explicit report deadline before timeout, ideally under 10 minutes. pi-loop cannot interrupt child agents for you: do independent lead-owned work while they run when possible, otherwise wait for reports instead of forcing a feedback checkpoint. Near the cap, request final or partial reports, record a tiny loop_feedback checkpoint, list missing pieces as nextActions, and move unfinished research into the next feedback attempt.";
+  return "Bounded research/delegation rule: spawned research agents are allowed and valuable when they can return useful evidence inside the loop cap, but delegation itself is not progress evidence. Keep the lead responsible for decomposition, synthesis, verification, and loop_feedback. When independent questions exist, prefer several small read-only research/review lanes over one broad \"do the whole goal\" agent; each spawned agent needs a narrow question, concrete files or search targets, a report shape, and an explicit report deadline before timeout, ideally under 10 minutes. pi-loop cannot interrupt child agents for you: do independent lead-owned work while they run when possible, otherwise wait for reports instead of forcing a feedback checkpoint. Near the cap, request final or partial reports, record a focused loop_feedback checkpoint, list missing pieces as nextActions, and move unfinished research into the next feedback attempt.";
 }
 
 function reviewGateGuidance(state: LoopRuntimeState): string | undefined {

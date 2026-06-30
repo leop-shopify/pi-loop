@@ -30,7 +30,7 @@ The extensions add:
 | Surface | Name | Purpose |
 | --- | --- | --- |
 | Command | `/loop` | Starts, stops, clears, and reports loop status. |
-| Tool | `loop_feedback` | Records a tiny turn checkpoint; pi-loop scores from target context and existing tool history, not a large model-supplied evidence object. |
+| Tool | `loop_feedback` | Records a focused turn checkpoint plus compact acceptance criteria and plan-task state; pi-loop scores from target context and existing tool history, not a large model-supplied evidence object. |
 | UI | floating right-side panel | Shows runtime data, current prompt, timing, tokens, and bounded step history. |
 | State | `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` | Persists loop config, internal measurements, progress entries, and stop events in Pi's global agent directory. Active loops are bound to the Pi session that started them. |
 
@@ -116,9 +116,9 @@ Defaults:
 | Input program | A loop nest extracted from a source program. | A software engineering goal plus the repository state the agent inspects. |
 | Context prompt | Fixed system instructions describing role, input format, output format, action space, hardware, and crash handling. | `systemPromptAddon()` plus `scoringRubricSummary()`: role, limits, scoring contract, hard rules, required evidence, and stop conditions. |
 | Target loop presentation | The selected loop nest is normalized and shown to the LLM. | `/loop` builds a bounded context snapshot: cwd, package manager, package scripts, git branch/status, changed files, and recent scores. The agent still chooses the exact files to inspect. |
-| Initial analysis | The LLM must analyze the loop before proposing transformations. | The kickoff prompt explicitly requires analysis of problem, files, acceptance criteria, verification, and whether scoped research or delegation is needed inside the same capped loop round. |
-| Schedule proposition | The LLM proposes transformations in a structured format. | The agent states and executes its plan in normal conversation/tool use; `loop_feedback` records only a concise checkpoint so schema generation does not consume the loop. |
-| Response parser | Extracts the schedule from the LLM response. | TypeBox validates a small `loop_feedback` schema while scoring derives artifacts/checks from the target context and Pi tool history. |
+| Initial analysis | The LLM must analyze the loop before proposing transformations. | The kickoff prompt first runs acceptance discovery: the agent decides whether criteria are present, user-confirmed, and sufficient; user-provided bullets help but may still be judged insufficient before planning. |
+| Schedule proposition | The LLM proposes transformations in a structured format. | After the user confirms acceptance criteria, the agent states and executes a trackable plan in normal conversation/tool use; `loop_feedback` records acceptance status, criteria/candidates, and task statuses so the next prompt can continue from the right phase. |
+| Response parser | Extracts the schedule from the LLM response. | TypeBox validates a focused `loop_feedback` schema while scoring derives artifacts/checks from the target context and Pi tool history. |
 | Validity and legality checks | Lightweight syntax checks plus compiler legality checks. | Strict schema validation, independent evidence verification, and scoring hard caps flag or cap weak evidence and unresolved risks; pi-loop still does not formally prove arbitrary code safety. |
 | Compiler/runtime feedback | Reports invalid, illegal, solver failure, crash, or successful speedup/slowdown. | Reports typed outcome plus progress/evidence feedback: baseline recorded, new-best progress, verifier findings, blockers, strengths, and next actions. |
 | Optimization history | Feedback is appended to the dialogue so the next iteration can adapt. | Progress entries are appended to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`; continuation prompts are rebuilt as refined prompts with what was tried, what did not improve, plateau/repeat signals, best attempt to beat, blockers, next actions, budget, and compact ACE playbook context from `pi-ace-adapter` when enabled. |
@@ -128,15 +128,15 @@ Defaults:
 
 1. `/loop <goal>` parses command input into a loop config: goal, max turns, max runs, and max minutes.
 2. pi-loop builds a bounded context snapshot from the current working directory, package scripts, git state, changed files, and prior feedback attempts.
-3. The kickoff instructions allow bounded research and delegation only inside the same capped loop round. Spawned agents should get explicit report deadlines before the 10-minute cap; at timeout, the loop should capture final or partial findings, score the current evidence, and carry remaining research into the next attempt.
+3. The kickoff instructions first run acceptance discovery: the agent decides whether user-provided or discovered criteria are sufficient for a plan, asks contextual questions when they are not, or uses bounded research/delegation to bring back candidate options for the user to select.
 4. The config plus context snapshot and current Pi session id are appended to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` as a `config` entry.
 5. `loop_feedback` is activated for the session.
 6. pi-loop requests a daemon-ish ACE run through `pi-ace-adapter` when ACE storage is enabled and the selected playbook exists. The loop does not wait for ACE completion; output and metadata paths are logged.
-7. A kickoff prompt is sent as a normal user message. It includes the context snapshot, compact ACE context when enabled, and asks the agent to analyze first, use bounded research/delegation when useful, then work, then record lightweight feedback.
+7. A kickoff prompt is sent as a normal user message. It includes the context snapshot, compact ACE context when enabled, acceptance-discovery guidance, bounded research/delegation guidance, and instructions to record acceptance status, candidate or confirmed criteria, and plan-task state for the next refined prompt.
 8. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules for the work itself, and bounded delegation rules.
 9. On `agent_start`, pi-loop increments the turn counter, appends a `turn_started` event, and records how many score entries existed before the turn.
 10. The agent works with normal Pi tooling. pi-loop does not sandbox tools or prescribe the implementation path, and spawned-agent data collection remains part of the same loop cap.
-11. Before claiming completion, the agent must call `loop_feedback` with only a concise `summary`, `status`, `notes`, and optional short `nextActions`.
+11. Before claiming completion, the agent must call `loop_feedback` with only a concise `summary`, `status`, `notes`, `acceptanceStatus`, compact `acceptanceCriteria`, compact `planTasks`, and optional short `nextActions`.
 12. The feedback tool freezes the loop timer, infers evidence from the target context and current Pi tool history, classifies the outcome, appends a progress entry to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`, updates the widget, and returns progress feedback. The first call records only the baseline.
 13. On `agent_end`, pi-loop checks whether the turn produced feedback:
     - if not, it schedules a missing-feedback prompt
@@ -173,13 +173,21 @@ Parsed config:
 
 ### `loop_feedback` tool input
 
-The feedback input is intentionally tiny. The model should not restate artifacts, test matrices, design evidence, Rails safety, audit output, or review-gate details here. Those signals come from normal work performed during the turn: target context, file/tool history, bash check results, and final refinement.
+The feedback input is intentionally focused. The model should not restate artifacts, test matrices, design evidence, Rails safety, audit output, or review-gate details here. It should record only the checkpoint plus the acceptance-discovery state and trackable plan state needed to build the next prompt. Detailed signals still come from normal work performed during the turn: target context, file/tool history, bash check results, and final refinement.
 
 ```ts
 {
   summary?: string;
   status?: "continue" | "blocked" | "ready_for_review";
   notes?: string;
+  acceptanceStatus?: "missing" | "discovering" | "proposed" | "confirmed";
+  acceptanceCriteria?: string[];
+  planTasks?: Array<{
+    id?: string;
+    title: string;
+    status: "pending" | "in_progress" | "completed" | "blocked";
+    evidence?: string;
+  }>;
   nextActions?: string[];
 }
 ```
@@ -191,6 +199,9 @@ Field meanings:
 | `summary` | Concise human checkpoint for the turn. |
 | `status` | Whether the turn should continue, is blocked, or is ready for final review/refinement. |
 | `notes` | Optional blocker, handoff, or next-step note. |
+| `acceptanceStatus` | Whether criteria are missing, being discovered, proposed for user selection, or confirmed by the user. |
+| `acceptanceCriteria` | Candidate or confirmed observable criteria. Proposed criteria are not final until the user confirms/selects them. |
+| `planTasks` | Task plan with statuses used to choose the next verifiable slice after criteria are confirmed. |
 | `nextActions` | Optional short actions for the next refined prompt. |
 
 The internal scorer still applies hard caps, but it builds the scoring input internally from existing context and tool history instead of asking the model to generate a huge schema every turn.
@@ -259,7 +270,7 @@ Structured details keep internal measurement fields for persistence and automate
 
 ### UI output
 
-The floating right-side panel renders at 25% terminal width and 95% terminal height. It shows runtime data, a current prompt section summarized into useful execution news (`Now`, `Signal`, `Plan`, `Budget`, `Expected`) instead of raw “continue the loop” boilerplate, recent turn durations that wrap across lines instead of truncating, and the full runtime step history so the README model is visible while the loop runs. Toggle the panel with `Ctrl+Alt+L`, `/pi-loop hide`, `/pi-loop show`, or `/pi-loop toggle`:
+The floating right-side panel renders at 25% terminal width and 95% terminal height. It shows runtime data, a current prompt section containing the original user loop request with `/loop` removed, recent turn durations that wrap across lines instead of truncating, and the full runtime step history so the README model is visible while the loop runs. It never shows the generated kickoff/continuation prompt boilerplate in the current prompt panel. Toggle the panel with `Ctrl+Alt+L`, `/pi-loop hide`, `/pi-loop show`, or `/pi-loop toggle`:
 
 ```text
 ╭──────────── pi-loop <status> ────────────╮
@@ -274,11 +285,8 @@ The floating right-side panel renders at 25% terminal width and 95% terminal hei
 │recent: #1 9m 12s, #2 8m 03s             │
 │        #3 10m 00s, #4 2m 17s            │
 │──────── current prompt ────────          │
-│Now: continue the loop with a concrete    │
-│     plan for <goal>                      │
-│Signal: <last progress or baseline>       │
-│Plan: <next action to try>                │
-│Expected: finish one verifiable slice...  │
+│Now: <original loop request, without      │
+│     /loop>                               │
 │──────── step history ────────            │
 │  07 done  start turn - turn <n>/<max>    │
 │> 08 now   agent work - work in progress  │
@@ -315,27 +323,41 @@ Start Pi in a repository, then run:
 
 Expected first turn:
 
-1. The agent identifies the affected production and test files.
-2. It maps acceptance criteria, for example:
+1. The agent runs acceptance discovery: decide whether the user already confirmed criteria for the loop.
+2. If the criteria are obvious from the user's prompt, it proposes them for confirmation; if the goal is vague, it asks contextual questions or researches candidate options first.
+3. After the user confirms criteria, it can record criteria such as:
    - discounts are applied for eligible carts
    - ineligible carts keep the original total
    - owned code is not mocked
    - the changed behavior is covered by observable assertions
-3. It edits or adds tests.
-4. It runs verification, for example:
+4. It builds a trackable plan from the confirmed criteria.
+5. It edits or adds tests.
+6. It runs verification, for example:
 
 ```bash
 pnpm test tests/cart-calculator.test.mjs
 pnpm typecheck
 ```
 
-5. It calls `loop_feedback` with a tiny checkpoint like this:
+7. It calls `loop_feedback` with a focused checkpoint like this:
 
 ```json
 {
   "summary": "Added behavior tests for eligible and ineligible cart discounts without mocking owned code.",
   "status": "ready_for_review",
   "notes": "targeted tests and typecheck passed; carry any remaining review-gate hardening into final refinement",
+  "acceptanceStatus": "confirmed",
+  "acceptanceCriteria": [
+    "discounts are applied for eligible carts",
+    "ineligible carts keep the original total",
+    "owned code is not mocked",
+    "the changed behavior is covered by observable assertions"
+  ],
+  "planTasks": [
+    { "id": "T1", "title": "Map discount behavior and current tests", "status": "completed", "evidence": "CartCalculator tests inspected" },
+    { "id": "T2", "title": "Add observable discount tests", "status": "completed", "evidence": "focused test passed" },
+    { "id": "T3", "title": "Run remaining review gates", "status": "pending" }
+  ],
   "nextActions": ["run the remaining configured checks if the loop continues"]
 }
 ```
@@ -463,18 +485,18 @@ PHASE 2: ITERATIVE OPTIMIZATION LOOP
 +--------------------------------------------------+
 | Agent turn                                       |
 | - inspect files                                  |
-| - map requirements                               |
-| - state a plan in normal prose                   |
+| - map acceptance criteria                        |
+| - state/update trackable plan tasks              |
 | - edit / investigate                             |
 | - run real checks                                |
 | - leave evidence in tool history                 |
 +--------------------------------------------------+
   |
-  | tiny summary/status checkpoint
+  | focused checkpoint + acceptanceStatus/criteria/tasks
   v
 +--------------------------------------------------+
 | loop_feedback                                    |
-| TypeBox validates tiny input schema              |
+| TypeBox validates focused input schema           |
 | freezes loop timer for post-processing           |
 +--------------------------------------------------+
   |

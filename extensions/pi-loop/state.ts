@@ -233,7 +233,7 @@ export function deadlineReached(state: LoopRuntimeState, now: number = Date.now(
 }
 
 export function turnLimitReached(state: LoopRuntimeState): boolean {
-  return state.turnsStarted >= state.maxTurns;
+  return normalTurnsStarted(state) >= state.maxTurns;
 }
 
 export function lastScore(state: LoopRuntimeState): LoopScoreEntry | null {
@@ -246,6 +246,38 @@ export function lastScoreForRun(state: LoopRuntimeState, run: number = state.cur
 
 export function bestScore(state: LoopRuntimeState): LoopScoreEntry | null {
   return [...state.results].sort((a, b) => b.score - a.score)[0] ?? null;
+}
+
+export function acceptanceReadyTurn(state: LoopRuntimeState): number | null {
+  const first = state.results[0];
+  const legacyReadyTurn = first && first.attempt?.acceptanceStatus === undefined ? 0 : null;
+  if (legacyReadyTurn !== null) return legacyReadyTurn;
+  const ready = state.results.find((entry) => {
+    const attempt = entry.attempt;
+    return attempt?.acceptanceStatus === "confirmed" && (attempt.acceptanceCriteria?.length ?? 0) > 0 && (attempt.planTasks?.length ?? 0) > 0;
+  });
+  return ready ? ready.globalTurn ?? ready.turn : null;
+}
+
+export function acceptanceReady(state: LoopRuntimeState): boolean {
+  return acceptanceReadyTurn(state) !== null;
+}
+
+export function normalWorkStarted(state: LoopRuntimeState): boolean {
+  return normalTurnsStarted(state) > 0;
+}
+
+export function normalTurnsStarted(state: LoopRuntimeState): number {
+  const readyTurn = acceptanceReadyTurn(state);
+  if (readyTurn === null) return 0;
+  if (state.currentRun > 1) return state.turnsStarted;
+  return Math.max(0, state.turnsStarted - readyTurn);
+}
+
+export function normalTotalTurnsStarted(state: LoopRuntimeState): number {
+  const readyTurn = acceptanceReadyTurn(state);
+  if (readyTurn === null) return 0;
+  return Math.max(0, state.totalTurnsStarted - readyTurn);
 }
 
 export function previousScoreValue(state: LoopRuntimeState): number | null {

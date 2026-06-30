@@ -6,10 +6,21 @@ import { scoreLoopResult } from "../extensions/pi-loop/scoring-heuristics.ts";
 import { LoopFeedbackParams } from "../extensions/pi-loop/tool-schema.ts";
 import { strongInput } from "./helpers/scoring-fixtures.mjs";
 
-test("feedback schema stays tiny and rejects invalid status or heavy evidence payloads", () => {
+test("feedback schema stays focused and rejects invalid status or heavy evidence payloads", () => {
   assert.equal(Value.Check(LoopFeedbackParams, { summary: "x", status: "done" }), false);
   assert.equal(Value.Check(LoopFeedbackParams, { summary: "x", artifacts: [{ path: "source.ts" }] }), false);
-  assert.equal(Value.Check(LoopFeedbackParams, { summary: "x", status: "ready_for_review", notes: "n", nextActions: ["a"] }), true);
+  assert.equal(Value.Check(LoopFeedbackParams, {
+    summary: "x",
+    status: "ready_for_review",
+    notes: "n",
+    acceptanceStatus: "confirmed",
+    acceptanceCriteria: ["User can inspect the new prompt structure"],
+    planTasks: [
+      { id: "T1", title: "Update prompts", status: "completed", evidence: "prompt test passes" },
+      { id: "T2", title: "Keep a second task without arbitrary task-count caps", status: "pending" },
+    ],
+    nextActions: ["a"],
+  }), true);
 });
 
 test("executable changes require a passed test or coverage command", () => {

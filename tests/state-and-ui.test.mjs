@@ -13,9 +13,11 @@ import { appendLogEntry, deleteLog, reconstructLoopState } from "../extensions/p
 import { loopLogPath } from "../extensions/pi-loop/paths.ts";
 import { runtimeStepRows } from "../extensions/pi-loop/runtime-steps.ts";
 import {
+  acceptanceReady,
   createLoopState,
   deadlineReached,
   elapsedMs,
+  normalTurnsStarted,
   pauseLoopTimer,
   resumeLoopTimer,
   scoreEntryFromResult,
@@ -107,8 +109,43 @@ test("state reconstructs started turns before a score is recorded", () => {
     assert.equal(reconstructed.turnsStarted, 1);
     assert.equal(reconstructed.totalTurnsStarted, 1);
     assert.equal(reconstructed.runs[0].turnsStarted, 1);
-    assert.equal(runtimeStepRows(reconstructed).find((step) => step.label === "start turn").status, "done");
+    assert.equal(runtimeStepRows(reconstructed).find((step) => step.label === "plan acceptance").status, "active");
+    assert.equal(runtimeStepRows(reconstructed).find((step) => step.label === "start turn").status, "waiting");
   });
+});
+
+test("legacy acceptance readiness and turn accounting stay open after post-upgrade feedback", () => {
+  const state = createLoopState();
+  startLoopState(state, {
+    goal: "continue legacy loop",
+    targetScore: 90,
+    maxTurns: 3,
+    maxMinutes: 10,
+    startedAt: Date.now(),
+  });
+
+  state.results.push(progressEntry(1, null));
+  assert.equal(acceptanceReady(state), true);
+
+  state.turnsStarted = 2;
+  state.totalTurnsStarted = 2;
+  state.results.push(scoreEntryFromResult(2, "post-upgrade feedback", minimalScore, {
+    rationale: "Legacy loop normal feedback.",
+    fullPlan: "Continue legacy work.",
+    acceptanceStatus: "missing",
+    acceptanceCriteria: [],
+    planTasks: [],
+  }, 1, 2));
+  state.results.push(scoreEntryFromResult(3, "later confirmed feedback", minimalScore, {
+    rationale: "Later structured feedback.",
+    fullPlan: "Continue legacy work with structured metadata.",
+    acceptanceStatus: "confirmed",
+    acceptanceCriteria: ["legacy loop keeps normal turn accounting"],
+    planTasks: [{ id: "T1", title: "Continue legacy work", status: "in_progress" }],
+  }, 1, 3));
+
+  assert.equal(acceptanceReady(state), true);
+  assert.equal(normalTurnsStarted(state), 2);
 });
 
 test("state reconstructs historical missing-score turn counters", () => {
@@ -187,6 +224,7 @@ test("deadline and turn limits are enforced deterministically", () => {
     maxMinutes: 1,
     startedAt: Date.now() - 61_000,
   });
+  state.results.push(progressEntry(0, null));
   state.turnsStarted = 2;
 
   assert.equal(deadlineReached(state), true);
@@ -274,48 +312,41 @@ test("loop widget renders a passive side-panel dashboard with data, prompt, and 
   assert.match(text, /progress:/);
   assert.match(text, /recent:/);
   assert.match(text, /Now:/);
-  assert.match(text, /continue the loop with a concrete plan/);
-  assert.match(text, /Expected:/);
+  assert.match(text, /improve the dynamic loop interface/);
+  assert.doesNotMatch(text, /continue the loop with a concrete plan/);
+  assert.doesNotMatch(text, /Expected:/);
   assert.doesNotMatch(text, /Continue the pi-loop workflow/);
   assert.equal(lines.every((line) => visibleWidth(line) <= 52), true);
 });
 
-test("loop widget step history repeats turn lifecycle without restarting setup", () => {
+test("loop widget step history renders emitted pi-loop-step messages without synthesizing lifecycle rows", () => {
   const state = createLoopState();
   startLoopState(state, {
-    goal: "track cumulative loop steps",
+    goal: "track actual pi-loop-step messages",
     targetScore: 90,
     maxTurns: 3,
     maxMinutes: 10,
     startedAt: Date.now(),
   });
-  state.totalTurnsStarted = 2;
-  state.turnsStarted = 2;
-  state.results.push(progressEntry(1, null));
-  state.currentTurnStartedAt = Date.now();
+  state.stepHistory = [
+    { step: "starting loop", detail: "run 1/1, 3 attempts max", run: 1, turn: 0, globalTurn: 0, timestamp: 1 },
+    { step: "kickoff prompt", detail: "sent initial loop instructions", run: 1, turn: 0, globalTurn: 0, timestamp: 2 },
+    { step: "planning acceptance criteria", detail: "loop 1, acceptance turn 1, total 1", run: 1, turn: 1, globalTurn: 1, timestamp: 3 },
+    { step: "acceptance confirmed", detail: "criteria confirmed with trackable plan", run: 1, turn: 1, globalTurn: 1, timestamp: 4 },
+  ];
 
-  const text = renderLoopWidget(state, 72, plainTheme, 80).join("\n");
+  const text = renderLoopWidget(state, 78, plainTheme, 80).join("\n");
 
-  assert.match(text, / 01 done\s+parse config/);
-  assert.match(text, / 02 done\s+capture context/);
-  assert.match(text, / 03 done\s+bounded research/);
-  assert.match(text, / 04 done\s+persist log/);
-  assert.match(text, / 05 done\s+enable feedback/);
-  assert.match(text, / 06 done\s+kickoff prompt/);
-  assert.match(text, / 07 done\s+inject guardrails/);
-  assert.match(text, / 08 done\s+start turn/);
-  assert.match(text, / 09 done\s+agent work/);
-  assert.match(text, / 10 done\s+measure progress/);
-  assert.match(text, / 11 done\s+feedback/);
-  assert.match(text, / 12 done\s+start turn/);
-  assert.match(text, /> 13 now\s+agent work/);
-  assert.match(text, /\. 14 next\s+measure progress/);
-  assert.match(text, /\. 15 next\s+feedback/);
-  assert.match(text, /\. 16 next\s+finishing pi/);
-  assert.doesNotMatch(text, / 12 .*parse config/);
+  assert.match(text, / 01 done\s+starting loop\s+- run 1\/1, 3 attempts max/);
+  assert.match(text, / 02 done\s+kickoff prompt\s+- sent initial loop instructions/);
+  assert.match(text, / 03 done\s+planning acceptance/);
+  assert.match(text, /loop 1, acceptance turn 1, total 1/);
+  assert.match(text, /> 04 now\s+acceptance confirmed\s+- criteria confirmed with trackable plan/);
+  assert.doesNotMatch(text, /parse config/);
+  assert.doesNotMatch(text, /measure progress/);
 });
 
-test("loop widget summarizes the current prompt as a useful plan", () => {
+test("loop widget shows the original loop request instead of generated prompt text", () => {
   const state = createLoopState();
   startLoopState(state, {
     goal: "show useful current prompt text",
@@ -339,11 +370,12 @@ test("loop widget summarizes the current prompt as a useful plan", () => {
   const text = lines.join("\n");
 
   assert.match(text, /Now:/);
-  assert.match(text, /Signal: \+15\.3%/);
-  assert.match(text, /Plan:/);
-  assert.match(text, /concise side-panel summary/);
-  assert.match(text, /Expected:/);
+  assert.match(text, /show useful current prompt text/);
+  assert.doesNotMatch(text, /Signal:/);
+  assert.doesNotMatch(text, /Plan:/);
+  assert.doesNotMatch(text, /Expected:/);
   assert.doesNotMatch(text, /Continue the pi-loop workflow/);
+  assert.doesNotMatch(text, /concise side-panel summary/);
   assert.equal(lines.every((line) => visibleWidth(line) <= 44), true);
 });
 
@@ -394,8 +426,9 @@ test("loop status reports the README runtime steps", () => {
   assert.match(text, /Runtime steps:/);
   assert.match(text, /01\. done\s+parse config/);
   assert.match(text, /03\. waiting\s+bounded research/);
-  assert.match(text, /10\. active\s+measure progress/);
-  assert.match(text, /13\. waiting\s+reconstruct/);
+  assert.match(text, /08\. active\s+plan acceptance/);
+  assert.match(text, /10\. waiting\s+agent work/);
+  assert.match(text, /14\. waiting\s+reconstruct/);
 });
 
 test("runtime steps never mark future steps done while a loop is active", () => {
@@ -426,23 +459,18 @@ test("runtime steps expose only one active step and defer measure progress until
     maxMinutes: 120,
     startedAt: Date.now(),
   });
+  state.results.push(progressEntry(0, null));
   state.totalTurnsStarted = 1;
   state.turnsStarted = 1;
   state.currentTurnStartedAt = Date.now();
 
   const duringWork = runtimeStepRows(state);
-  const duringWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
   assert.deepEqual(duringWork.filter((step) => step.status === "active").map((step) => step.label), ["agent work"]);
   assert.equal(duringWork.find((step) => step.label === "measure progress").status, "waiting");
-  assert.equal(duringWorkCurrentLines.length, 1);
-  assert.match(duringWorkCurrentLines[0], /agent work/);
 
   state.currentTurnStartedAt = null;
   const afterWork = runtimeStepRows(state);
-  const afterWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
   assert.deepEqual(afterWork.filter((step) => step.status === "active").map((step) => step.label), ["measure progress"]);
-  assert.equal(afterWorkCurrentLines.length, 1);
-  assert.match(afterWorkCurrentLines[0], /measure progress/);
 });
 
 test("stale current-turn score cannot override active agent work", () => {
@@ -464,7 +492,7 @@ test("stale current-turn score cannot override active agent work", () => {
 
   assert.deepEqual(rows.filter((step) => step.status === "active").map((step) => step.label), ["agent work"]);
   assert.equal(rows.find((step) => step.label === "resume or stop").status, "waiting");
-  assert.match(historyText, /> \d+ now\s+agent work/);
+  assert.match(historyText, /No pi-loop-step messages recorded yet/);
   assert.doesNotMatch(historyText, /> .*resume or stop/);
 });
 
@@ -483,23 +511,17 @@ test("prior scores do not make resume-or-stop active during later agent work", (
   state.currentTurnStartedAt = Date.now();
 
   const duringWork = runtimeStepRows(state);
-  const duringWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
   assert.deepEqual(duringWork.filter((step) => step.status === "active").map((step) => step.label), ["agent work"]);
   assert.equal(duringWork.find((step) => step.label === "measure progress").status, "waiting");
   assert.equal(duringWork.find((step) => step.label === "resume or stop").status, "waiting");
-  assert.equal(duringWorkCurrentLines.length, 1);
-  assert.match(duringWorkCurrentLines[0], /agent work/);
 
   state.currentTurnStartedAt = null;
   const afterWork = runtimeStepRows(state);
-  const afterWorkCurrentLines = renderLoopWidget(state, 64, plainTheme).filter((line) => /\bnow\b/.test(line));
   assert.deepEqual(afterWork.filter((step) => step.status === "active").map((step) => step.label), ["measure progress"]);
   assert.equal(afterWork.find((step) => step.label === "resume or stop").status, "waiting");
-  assert.equal(afterWorkCurrentLines.length, 1);
-  assert.match(afterWorkCurrentLines[0], /measure progress/);
 });
 
-test("loop widget shows the full runtime step history in the expanded panel", () => {
+test("loop widget shows every recorded pi-loop-step history entry in the expanded panel", () => {
   const state = createLoopState();
   startLoopState(state, {
     goal: "make the side panel responsive at small terminal widths",
@@ -508,18 +530,22 @@ test("loop widget shows the full runtime step history in the expanded panel", ()
     maxMinutes: 120,
     startedAt: Date.now(),
   });
-  state.totalTurnsStarted = 1;
-  state.turnsStarted = 1;
-  state.results.push(progressEntry(1, null));
+  state.stepHistory = Array.from({ length: 35 }, (_, index) => ({
+    step: `step ${index + 1}`,
+    detail: `detail ${index + 1}`,
+    run: 1,
+    turn: index + 1,
+    globalTurn: index + 1,
+    timestamp: index + 1,
+  }));
 
   const narrowLines = renderLoopWidget(state, 40, plainTheme);
-  const historyLines = narrowLines.filter((line) => /[>. ]\s*\d{2}\s+(done|now|next)\b/.test(line));
+  const historyLines = narrowLines.filter((line) => /[> ]\s*\d{2}\s+(done|now)\b/.test(line));
 
-  assert.equal(historyLines.length, 16);
-  assert.match(narrowLines.join("\n"), /start turn/);
-  assert.match(narrowLines.join("\n"), /agent work/);
-  assert.match(narrowLines.join("\n"), /\. 12 next\s+start turn/);
-  assert.match(narrowLines.join("\n"), /\. 16 next\s+finishing pi/);
+  assert.equal(historyLines.length, 35);
+  assert.match(narrowLines.join("\n"), /step 1/);
+  assert.match(narrowLines.join("\n"), /step 35/);
+  assert.doesNotMatch(narrowLines.join("\n"), /start turn/);
   assert.equal(narrowLines.every((line) => visibleWidth(line) <= 40), true);
 });
 

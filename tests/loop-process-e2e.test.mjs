@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import piLoopExtension from "../extensions/pi-loop/index.ts";
 import { RESUME_DELAY_MS } from "../extensions/pi-loop/constants.ts";
-import { deleteLog, readLogEntries } from "../extensions/pi-loop/log.ts";
+import { appendLogEntry, deleteLog, readLogEntries } from "../extensions/pi-loop/log.ts";
 
 async function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "pi-loop-e2e-"));
@@ -18,6 +18,63 @@ async function withTempDir(fn) {
   }
 }
 
+test("loop_feedback rejects partial acceptance discovery without ending the turn", async () => {
+  await withTempDir(async (dir) => {
+    writeProject(dir);
+
+    const pi = mockPi();
+    const ctx = mockContext(dir);
+    piLoopExtension(pi);
+
+    await pi.commands.get("loop").handler("Plan a DIY small structure --minutes=10 --turns=2 --target=90", ctx);
+    await pi.events.get("agent_start")({}, ctx);
+
+    const response = await pi.tools.get("loop_feedback").execute("partial-acceptance", {
+      summary: "The user picked a DIY small structure, but the exact structure and constraints are still unknown.",
+      status: "continue",
+      acceptanceStatus: "discovering",
+      acceptanceCriteria: ["Plan a DIY small structure"],
+      nextActions: ["Ask which DIY structure type, size, location, budget, and expected output the loop should plan first."],
+    }, new AbortController().signal, () => {}, ctx);
+
+    assert.equal(response.terminate, false);
+    assert.match(response.content[0].text, /Acceptance discovery is not a loop_feedback checkpoint yet/);
+    assert.match(response.content[0].text, /Do not score partial discovery or each ask_user answer/);
+    const entries = readLogEntries(dir);
+    assert.equal(entries.some((entry) => entry.type === "score"), false);
+    assert.equal(pi.stepMessages.some((message) => message.content.startsWith("Step: feedback")), false);
+  });
+});
+
+test("legacy loop_feedback without acceptance fields stays scoreable and unstructured", async () => {
+  await withTempDir(async (dir) => {
+    writeProject(dir);
+
+    const pi = mockPi();
+    const ctx = mockContext(dir);
+    piLoopExtension(pi);
+
+    await pi.commands.get("loop").handler("Continue legacy loop --minutes=10 --turns=3 --target=90", ctx);
+    appendLogEntry(dir, legacyScoreEntry());
+    await pi.events.get("session_start")({}, ctx);
+    await pi.events.get("agent_start")({}, ctx);
+
+    const response = await pi.tools.get("loop_feedback").execute("legacy-feedback", {
+      summary: "Legacy loop made normal progress after upgrade.",
+      status: "continue",
+      notes: "no structured acceptance metadata was provided by this legacy turn",
+    }, new AbortController().signal, () => {}, ctx);
+
+    assert.equal(response.terminate, true);
+    assert.doesNotMatch(response.content[0].text, /Acceptance discovery is not a loop_feedback checkpoint yet/);
+    const scores = readLogEntries(dir).filter((entry) => entry.type === "score");
+    assert.equal(scores.length, 2);
+    assert.equal(scores.at(-1).attempt.acceptanceStatus, undefined);
+    assert.equal(scores.at(-1).attempt.acceptanceCriteria, undefined);
+    assert.equal(scores.at(-1).attempt.planTasks, undefined);
+  });
+});
+
 test("loop process treats lightweight feedback as progress and stops only at the configured limit", async () => {
   await withTempDir(async (dir) => {
     writeProject(dir);
@@ -26,14 +83,14 @@ test("loop process treats lightweight feedback as progress and stops only at the
     const ctx = mockContext(dir);
     piLoopExtension(pi);
 
-    await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=2 --target=90", ctx);
+    await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=1 --target=90", ctx);
     assert.ok(pi.activeTools.includes("loop_feedback"));
     assert.equal(pi.commands.has("pi-loop"), true);
     assert.equal(pi.shortcuts.size, 1);
     assert.match(pi.sentMessages[0].text, /Target context snapshot:/);
     assert.match(pi.sentMessages[0].text, /scripts: test, typecheck/);
     assert.deepEqual(pi.stepMessages.map((message) => message.content), [
-      "Step: starting loop — run 1/1, 2 attempts max",
+      "Step: starting loop — run 1/1, 1 attempts max",
       "Step: kickoff prompt — sent initial loop instructions",
     ]);
 
@@ -42,13 +99,13 @@ test("loop process treats lightweight feedback as progress and stops only at the
     const baselineResponse = await pi.tools.get("loop_feedback").execute("feedback-1", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({}, ctx);
 
-    assert.match(baselineResponse.content[0].text, /baseline recorded; continue/);
-    assert.match(baselineResponse.content[0].text, /Outcome: needs_iteration/);
-    assert.doesNotMatch(baselineResponse.content[0].text, /Heuristic|Raw score|Score:/);
+    assert.match(baselineResponse.content[0].text, /Acceptance planning recorded/);
+    assert.match(baselineResponse.content[0].text, /Confirmed acceptance criteria: 1/);
+    assert.doesNotMatch(baselineResponse.content[0].text, /Heuristic|Raw score|Score:|Outcome:|Blockers:/);
     assert.equal(baselineResponse.terminate, true);
     assert.equal(pi.activeTools.includes("loop_feedback"), true);
-    assert.ok(pi.stepMessages.some((message) => message.content.startsWith("Step: feedback — baseline recorded")));
-    assert.ok(pi.stepMessages.some((message) => message.content === "Step: review loop — loop 1, turn 1/2, total 1/2"));
+    assert.ok(pi.stepMessages.some((message) => message.content === "Step: acceptance confirmed — criteria confirmed with trackable plan"));
+    assert.ok(pi.stepMessages.some((message) => message.content === "Step: review loop — loop 1, turn 0/1, total 0/1"));
     await sleep(RESUME_DELAY_MS + 20);
     assert.match(pi.sentMessages.at(-1).text, /^Continue the pi-loop workflow/);
     assert.doesNotMatch(pi.sentMessages.at(-1).text, /^Start the pi-loop workflow/);
@@ -65,7 +122,7 @@ test("loop process treats lightweight feedback as progress and stops only at the
     assert.match(improvedResponse.content[0].text, /Outcome: successful_improvement/);
     assert.doesNotMatch(improvedResponse.content[0].text, /Heuristic|Raw score|Score:/);
     assert.equal(pi.activeTools.includes("loop_feedback"), false);
-    assert.ok(pi.stepMessages.some((message) => message.content.startsWith("Step: starting agent work — loop 1, turn 2/2")));
+    assert.ok(pi.stepMessages.some((message) => message.content.startsWith("Step: starting agent work — loop 1, turn 1/1")));
     assert.ok(pi.stepMessages.some((message) => /Step: feedback — \+/.test(message.content)));
 
     const entries = readLogEntries(dir);
@@ -84,6 +141,8 @@ test("loop process treats lightweight feedback as progress and stops only at the
     assert.equal(processEntries[3].globalTurn, 2);
     assert.equal(processEntries[4].outcome, "successful_improvement");
     assert.equal(processEntries[4].improvement > 0, true);
+    assert.equal(processEntries[4].attempt.acceptanceStatus, "confirmed");
+    assert.deepEqual(processEntries[4].attempt.acceptanceCriteria, ["source behavior is verified by the configured checks"]);
     assert.match(processEntries[5].reason, /all runs exhausted/);
 
     const finalMessage = pi.sentMessages.at(-1).text;
@@ -107,30 +166,34 @@ test("missing-feedback recovery records feedback without counting a new loop tur
 
     await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=3 --target=90", ctx);
     await pi.events.get("agent_start")({}, ctx);
+    await pi.tools.get("loop_feedback").execute("acceptance-ready", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
+    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Acceptance criteria confirmed." }] }, ctx);
+
+    await pi.events.get("agent_start")({}, ctx);
     recordBashCheck(ctx, "pnpm test", "tests passed");
     await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Need to record feedback." }] }, ctx);
 
     let processEntries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
-    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1]);
+    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1, 2]);
     assert.equal(processEntries.at(-1).event, "missing_score");
 
     await pi.events.get("agent_start")({}, ctx);
-    const recoveryResponse = await pi.tools.get("loop_feedback").execute("feedback-recovery", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
+    const recoveryResponse = await pi.tools.get("loop_feedback").execute("feedback-recovery", feedbackParams(), new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Feedback recorded." }] }, ctx);
 
     assert.equal(recoveryResponse.terminate, true);
     assert.ok(pi.stepMessages.some((message) => message.content === "Step: recording feedback — loop 1, turn 1/3, total 1/3"));
 
     processEntries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
-    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1]);
+    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1, 2]);
     const scores = processEntries.filter((entry) => entry.type === "score");
-    assert.equal(scores.length, 1);
-    assert.equal(scores[0].turn, 1);
-    assert.equal(scores[0].globalTurn, 1);
+    assert.equal(scores.length, 2);
+    assert.equal(scores[1].turn, 2);
+    assert.equal(scores[1].globalTurn, 2);
 
     await pi.events.get("agent_start")({}, ctx);
     processEntries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
-    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1, 2]);
+    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1, 2, 3]);
   });
 });
 
@@ -189,15 +252,18 @@ test("multi-run process advances after a failed run and stops when all runs are 
 
     await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=1 --runs=2 --target=95", ctx);
     await pi.events.get("agent_start")({}, ctx);
+    await pi.tools.get("loop_feedback").execute("acceptance-ready", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
+    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Acceptance ready" }] }, ctx);
+    await pi.events.get("agent_start")({}, ctx);
     await pi.tools.get("loop_feedback").execute("feedback-1", { ...feedbackParams(), status: "blocked", notes: "important requirement missing" }, new AbortController().signal, () => {}, ctx);
     await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Continuing" }] }, ctx);
 
     let entries = readLogEntries(dir);
     let processEntries = entries.filter((entry) => entry.event !== "loop_step");
-    assert.deepEqual(processEntries.map((entry) => entry.type), ["config", "event", "score", "event", "event"]);
+    assert.deepEqual(processEntries.map((entry) => entry.type), ["config", "event", "score", "event", "score", "event", "event"]);
     assert.equal(processEntries[1].event, "turn_started");
-    assert.equal(processEntries[3].event, "run_stopped");
-    assert.equal(processEntries[4].event, "run_started");
+    assert.equal(processEntries[5].event, "run_stopped");
+    assert.equal(processEntries[6].event, "run_started");
     assert.ok(pi.activeTools.includes("loop_feedback"));
     assert.ok(pi.stepMessages.some((message) => message.content === "Step: restarting loop 2 — run 2/2"));
 
@@ -208,7 +274,7 @@ test("multi-run process advances after a failed run and stops when all runs are 
     entries = readLogEntries(dir);
     processEntries = entries.filter((entry) => entry.event !== "loop_step");
     assert.equal(processEntries.at(-2).run, 2);
-    assert.equal(processEntries.at(-2).globalTurn, 2);
+    assert.equal(processEntries.at(-2).globalTurn, 3);
     assert.match(processEntries.at(-1).reason, /all runs exhausted/);
     assert.equal(pi.activeTools.includes("loop_feedback"), false);
   });
@@ -222,6 +288,10 @@ test("missing score and premature completion claims are logged", async () => {
     piLoopExtension(pi);
 
     await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=2 --target=95", ctx);
+    await pi.events.get("agent_start")({}, ctx);
+    await pi.tools.get("loop_feedback").execute("acceptance-ready", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
+    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Acceptance ready" }] }, ctx);
+
     await pi.events.get("agent_start")({}, ctx);
     await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Done" }] }, ctx);
 
@@ -238,6 +308,27 @@ test("missing score and premature completion claims are logged", async () => {
   });
 });
 
+function legacyScoreEntry() {
+  return {
+    type: "score",
+    run: 1,
+    turn: 1,
+    globalTurn: 1,
+    timestamp: Date.now(),
+    summary: "legacy pre-upgrade feedback",
+    score: 60,
+    rawScore: 60,
+    targetScore: 90,
+    baselineScore: 60,
+    progressPercent: null,
+    passedDefinition: false,
+    improvement: null,
+    blockers: [],
+    nextActions: ["continue legacy loop work"],
+    categories: [],
+  };
+}
+
 function writeProject(dir) {
   writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "node --test", typecheck: "tsc --noEmit" } }));
   writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
@@ -250,6 +341,12 @@ function weakFeedbackParams() {
     summary: "Partial feedback recorded; status output still needs verification.",
     status: "continue",
     notes: "targeted test passed, but status output was not validated yet",
+    acceptanceStatus: "confirmed",
+    acceptanceCriteria: ["source behavior is verified by the configured checks"],
+    planTasks: [
+      { id: "T1", title: "Run focused source test", status: "completed", evidence: "pnpm test passed" },
+      { id: "T2", title: "Run typecheck", status: "pending" },
+    ],
   };
 }
 
@@ -258,7 +355,19 @@ function feedbackParams() {
     summary: "Verified source behavior with focused checks.",
     status: "ready_for_review",
     notes: "source behavior is ready for final refinement",
+    planTasks: [
+      { id: "T1", title: "Run focused source test", status: "completed", evidence: "pnpm test passed" },
+      { id: "T2", title: "Run typecheck", status: "completed", evidence: "pnpm typecheck passed" },
+    ],
     nextActions: ["carry any leftovers into the next attempt"],
+  };
+}
+
+function confirmedFeedbackParams() {
+  return {
+    ...feedbackParams(),
+    acceptanceStatus: "confirmed",
+    acceptanceCriteria: ["source behavior is verified by the configured checks"],
   };
 }
 

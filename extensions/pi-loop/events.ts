@@ -7,7 +7,7 @@ import { appendLogEntry, reconstructLoopState } from "./log.ts";
 import { assistantTextFromEvent, hasCompletionClaim, missingScoreReason, prematureStopPrompt } from "./premature-stop.ts";
 import { continuePrompt, delegationPendingPrompt, missingScorePrompt, nextRunPrompt, systemPromptAddon } from "./prompt.ts";
 import { canStartNextRun, currentRunCanContinue, markCurrentRunStopped, startNextRun } from "./run-manager.ts";
-import { resumeLoopTimer } from "./state.ts";
+import { acceptanceReady, resumeLoopTimer } from "./state.ts";
 import { loopTurnDetail, sendLoopStepMessage } from "./step-message.ts";
 import { updateLoopWidget } from "./ui.ts";
 
@@ -49,7 +49,7 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "turn_started", timestamp: startedAt, run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted });
     captureContextUsage(ctx, state);
     updateLoopWidget(ctx, state);
-    sendLoopStepMessage(pi, state, "starting agent work", loopTurnDetail(state), ctx.cwd);
+    sendLoopStepMessage(pi, state, acceptanceReady(state) ? "starting agent work" : "planning acceptance criteria", loopTurnDetail(state), ctx.cwd);
   });
 
   pi.on("agent_end", async (event, ctx) => {
@@ -75,6 +75,14 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
       }
 
       state.unscoredConsecutiveTurns++;
+      if (!acceptanceReady(state)) {
+        state.unscoredConsecutiveTurns = 0;
+        sendLoopStepMessage(pi, state, "planning acceptance criteria", "acceptance criteria must be clear and trackable before agent work starts", ctx.cwd);
+        const aceContext = await buildAceLoopContext(ctx);
+        controller.scheduleResume(ctx, state, continuePrompt(state, { aceContext }));
+        return;
+      }
+
       state.pendingFeedbackTurn = { run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted };
       appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "missing_score", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, reason: missingScoreReason(claimedCompletion), details: { claimedCompletion } });
       sendLoopStepMessage(pi, state, "missing feedback", missingScoreReason(claimedCompletion), ctx.cwd);
@@ -83,6 +91,13 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
         return;
       }
       controller.scheduleResume(ctx, state, missingScorePrompt(state, claimedCompletion));
+      return;
+    }
+
+    if (!acceptanceReady(state)) {
+      sendLoopStepMessage(pi, state, "planning acceptance criteria", "acceptance criteria not ready for normal agent work", ctx.cwd);
+      const aceContext = await buildAceLoopContext(ctx);
+      controller.scheduleResume(ctx, state, continuePrompt(state, { aceContext }));
       return;
     }
 

@@ -69,7 +69,7 @@ export const SCORING_HEURISTICS = {
 export function scoringRubricSummary(): string {
   return [
     "Loop progress is shown as percent improvement over the first feedback turn; internal measurements are not the user-facing result.",
-    "Loop stop rule: loop_feedback provides a tiny checkpoint only; the loop keeps exploring until configured time/turn/run limits, user stop, or repeated missing feedback calls.",
+    "Loop stop rule: loop_feedback provides a focused checkpoint only; the loop keeps exploring until configured time/turn/run limits, user stop, or repeated missing feedback calls.",
     "Internal evidence categories: correctness, testing quality, design/SOLID, framework-specific/Rails engineering when relevant, verification/gates, automated review gates, and operability.",
     "Tests must assert externally visible behavior and cover the changed code or target bug.",
     "Mocking owned code, mock-only tests, implementation-coupled tests, and flaky sleep-based tests block high scores.",

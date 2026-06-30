@@ -126,7 +126,7 @@ function recordLoopStep(state: LoopRuntimeState, entry: LoopEventEntry): void {
     turn: typeof details.turn === "number" ? details.turn : entry.turn ?? state.turnsStarted,
     globalTurn: typeof details.globalTurn === "number" ? details.globalTurn : entry.globalTurn ?? entry.turn ?? state.totalTurnsStarted,
     timestamp: typeof details.timestamp === "number" ? details.timestamp : entry.timestamp,
-  }].slice(-50);
+  }];
 }
 
 function recordAceRun(state: LoopRuntimeState, entry: LoopEventEntry): void {

@@ -1,6 +1,6 @@
 import { MAX_TOTAL_TURNS } from "./constants.ts";
 import { bestProgressEntry, shortProgressPercent } from "./progress.ts";
-import { bestScore, turnLimitReached, type LoopRuntimeState } from "./state.ts";
+import { acceptanceReady, bestScore, normalTotalTurnsStarted, normalTurnsStarted, turnLimitReached, type LoopRuntimeState } from "./state.ts";
 
 export function totalTurnBudgetExceeded(maxRuns: number, maxTurns: number): boolean {
   return maxRuns * maxTurns > MAX_TOTAL_TURNS;
@@ -45,6 +45,10 @@ export function bestScoreReason(state: LoopRuntimeState): string {
 export function runBudgetText(state: LoopRuntimeState): string {
   const currentRun = state.currentRun ?? 1;
   const maxRuns = state.maxRuns ?? 1;
-  const totalTurns = state.totalTurnsStarted ?? state.turnsStarted;
-  return `run ${currentRun}/${maxRuns}, turn ${Math.min(state.turnsStarted + 1, state.maxTurns)}/${state.maxTurns}, total turns ${totalTurns}/${maxRuns * state.maxTurns}, ${state.maxMinutes} minute capped timebox`;
+  if (!acceptanceReady(state)) {
+    return `run ${currentRun}/${maxRuns}, acceptance planning turn ${state.turnsStarted + 1}, normal work turns 0/${state.maxTurns}, ${state.maxMinutes} minute capped timebox`;
+  }
+  const normalTurns = normalTurnsStarted(state);
+  const totalNormalTurns = normalTotalTurnsStarted(state);
+  return `run ${currentRun}/${maxRuns}, turn ${Math.min(normalTurns + 1, state.maxTurns)}/${state.maxTurns}, total turns ${totalNormalTurns}/${maxRuns * state.maxTurns}, ${state.maxMinutes} minute capped timebox`;
 }

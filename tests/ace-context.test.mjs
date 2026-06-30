@@ -151,7 +151,7 @@ test("spawn-only turns wait for agent reports instead of forcing a missing-score
     assert.equal(state.unscoredConsecutiveTurns, 0);
     assert.match(state.currentPrompt, /spawn-only turn is not scoreable progress/);
     assert.deepEqual(pi.stepMessages.map((message) => message.content), [
-      "Step: review loop — loop 1, turn 1/2, total 1/2",
+      "Step: review loop — loop 1, acceptance turn 1, total 1",
       "Step: delegation pending — spawned agents are running; waiting for focused reports before feedback",
     ]);
     assert.equal(readLogEntries(dir).find((entry) => entry.event === "delegation_pending")?.event, "delegation_pending");

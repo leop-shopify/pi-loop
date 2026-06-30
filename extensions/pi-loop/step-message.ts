@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { appendLogEntry } from "./log.ts";
-import type { LoopRuntimeState } from "./state.ts";
+import { acceptanceReady, normalTotalTurnsStarted, normalTurnsStarted, type LoopRuntimeState } from "./state.ts";
 
 export function sendLoopStepMessage(pi: Pick<ExtensionAPI, "sendMessage">, state: LoopRuntimeState, step: string, detail?: string, cwd?: string): void {
   const timestamp = Date.now();
@@ -13,7 +13,7 @@ export function sendLoopStepMessage(pi: Pick<ExtensionAPI, "sendMessage">, state
     globalTurn: state.totalTurnsStarted,
     timestamp,
   };
-  state.stepHistory = [...(state.stepHistory ?? []), entry].slice(-50);
+  state.stepHistory = [...(state.stepHistory ?? []), entry];
   if (cwd) {
     try {
       appendLogEntry(cwd, { type: "event", schemaVersion: 2, event: "loop_step", timestamp, run: entry.run, turn: entry.turn, globalTurn: entry.globalTurn, reason: step, details: entry });
@@ -36,5 +36,6 @@ export function sendLoopStepMessage(pi: Pick<ExtensionAPI, "sendMessage">, state
 }
 
 export function loopTurnDetail(state: LoopRuntimeState): string {
-  return `loop ${state.currentRun}, turn ${state.turnsStarted}/${state.maxTurns}, total ${state.totalTurnsStarted}/${state.maxRuns * state.maxTurns}`;
+  if (!acceptanceReady(state)) return `loop ${state.currentRun}, acceptance turn ${state.turnsStarted}, total ${state.totalTurnsStarted}`;
+  return `loop ${state.currentRun}, turn ${normalTurnsStarted(state)}/${state.maxTurns}, total ${normalTotalTurnsStarted(state)}/${state.maxRuns * state.maxTurns}`;
 }

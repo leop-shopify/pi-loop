@@ -3,13 +3,11 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 
 import { hideFloatingPanel, showFloatingPanel } from "./floating-panel.ts";
 import { bestProgressEntry, formatProgressPercent, progressBarPercent } from "./progress.ts";
-import type { RuntimeStepRow } from "./runtime-steps.ts";
-import { elapsedMs, lastScore, type LoopRuntimeState } from "./state.ts";
+import { acceptanceReady, elapsedMs, lastScore, normalTotalTurnsStarted, type LoopRuntimeState, type LoopStepHistoryEntry } from "./state.ts";
 
 const PANEL_KEY = "pi-loop";
 const MIN_PROMPT_LINE_LIMIT = 15;
 const SECTION_FRAME_ROWS = 2;
-const STEP_HISTORY_LINE_LIMIT = 30;
 
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -73,7 +71,7 @@ export function renderLoopWidget(state: LoopRuntimeState, width: number, theme: 
   const contentWidth = Math.max(1, safeWidth - 4);
   const targetContentHeight = Math.max(0, (height ?? 0) - 2);
   const data = dataLines(state, contentWidth, theme);
-  const history = stepHistoryLines(state, contentWidth, theme);
+  const history = stepHistoryLines(state, contentWidth, theme, historyLineLimitForHeight(targetContentHeight, data.length));
   const promptLimit = promptLineLimitForHeight(targetContentHeight, data.length, history.length);
   const content = fitContentHeight([
     ...section("data", data, contentWidth, theme),
@@ -100,7 +98,7 @@ function dataLines(state: LoopRuntimeState, width: number, theme: Theme): string
   const bar = progressBar(progressBarPercent(scoreEntry?.progressPercent ?? null), Math.max(6, Math.min(14, Math.floor(width / 3))), theme);
 
   return [
-    keyValueLine("turn", `${state.totalTurnsStarted}/${state.maxTurns * state.maxRuns} total, run ${state.currentRun}/${state.maxRuns}`, width, theme),
+    keyValueLine("turn", turnUsageText(state), width, theme),
     keyValueLine("time", `${formatElapsed(elapsedMs(state))}/${state.maxMinutes}m all, current ${turnText}`, width, theme),
     keyValueLine("last turn", lastTurnText, width, theme),
     keyValueLine("tokens", contextUsageText(state), width, theme),
@@ -109,6 +107,11 @@ function dataLines(state: LoopRuntimeState, width: number, theme: Theme): string
     keyValueLine("ace", aceRunText(state), width, theme),
     ...recentTurnLines(state, width, theme),
   ];
+}
+
+function turnUsageText(state: LoopRuntimeState): string {
+  if (!acceptanceReady(state)) return `acceptance turn ${state.totalTurnsStarted}, 0/${state.maxTurns * state.maxRuns} normal total, run ${state.currentRun}/${state.maxRuns}`;
+  return `${normalTotalTurnsStarted(state)}/${state.maxTurns * state.maxRuns} normal total, run ${state.currentRun}/${state.maxRuns}`;
 }
 
 function promptLines(state: LoopRuntimeState, width: number, theme: Theme, maxLines: number): string[] {
@@ -122,27 +125,8 @@ function promptLines(state: LoopRuntimeState, width: number, theme: Theme, maxLi
 }
 
 function promptSummaryLines(state: LoopRuntimeState, width: number): string[] {
-  const prompt = state.currentPrompt?.trim() ?? "";
-  const goal = extractLineValue(prompt, "Goal") ?? state.goal ?? "Waiting for the next loop prompt.";
-  const direction = firstPresent(
-    extractSection(prompt, "Required new direction"),
-    extractSection(prompt, "Top next actions"),
-    extractSection(prompt, "Next actions from feedback scorer"),
-    extractSection(prompt, "Feedback-scorer suggested directions"),
-  );
-  const progress = extractLineValue(prompt, "Last progress") ?? lastScoreProgressText(state);
-  const budget = extractLineValue(prompt, "Budget");
-  const rawFallback = prompt && !direction && !/^Continue the pi-loop workflow/i.test(prompt) ? prompt : undefined;
-
-  const items: Array<[string, string]> = [
-    ["Now", rawFallback ? compactSummaryText(rawFallback, 300) : `continue the loop with a concrete plan for ${compactSummaryText(goal, 160)}`],
-  ];
-  if (progress) items.push(["Signal", compactSummaryText(progress, 180)]);
-  if (direction) items.push(["Plan", compactSummaryText(direction, 320)]);
-  if (budget) items.push(["Budget", compactSummaryText(budget, 180)]);
-  items.push(["Expected", "finish one focused slice, do normal verification/refinement work as needed, call loop_feedback with a tiny checkpoint, and carry leftovers into the next attempt"]);
-
-  return items.flatMap(([label, value]) => labeledWrappedLines(label, value, width));
+  const goal = state.goal?.trim() || "Waiting for the next loop prompt.";
+  return labeledWrappedLines("Now", compactSummaryText(goal, 300), width);
 }
 
 function labeledWrappedLines(label: string, value: string, width: number): string[] {
@@ -154,39 +138,6 @@ function labeledWrappedLines(label: string, value: string, width: number): strin
   return wrapped.map((line, index) => `${index === 0 ? prefix : " ".repeat(prefixWidth)}${line}`);
 }
 
-function extractLineValue(text: string, label: string): string | undefined {
-  const prefix = `${label}:`;
-  const line = text.split(/\r?\n/).find((item) => item.trimStart().startsWith(prefix));
-  const value = line?.trimStart().slice(prefix.length).trim();
-  return value || undefined;
-}
-
-function extractSection(text: string, label: string): string | undefined {
-  const lines = text.split(/\r?\n/);
-  const prefix = `${label}:`;
-  const start = lines.findIndex((line) => line.trimStart().startsWith(prefix));
-  if (start === -1) return undefined;
-  const first = lines[start].trimStart().slice(prefix.length).trim();
-  const collected: string[] = first ? [first] : [];
-  for (let index = start + 1; index < lines.length; index++) {
-    const line = lines[index];
-    if (!line.trim()) break;
-    if (/^[A-Z][A-Za-z0-9 /-]{2,}:\s*/.test(line) && !line.trimStart().startsWith("- ")) break;
-    collected.push(line.trim());
-  }
-  const normalized = collected.map((line) => line.replace(/^[-*]\s*/, "")).join("; ").replace(/\s+/g, " ").trim();
-  return normalized || undefined;
-}
-
-function firstPresent(...values: Array<string | undefined>): string | undefined {
-  return values.find((value) => Boolean(value));
-}
-
-function lastScoreProgressText(state: LoopRuntimeState): string | undefined {
-  const score = lastScore(state);
-  return score ? formatProgressPercent(score.progressPercent ?? null) : undefined;
-}
-
 function compactSummaryText(text: string, maxChars: number): string {
   const compacted = text.replace(/\s+/g, " ").trim();
   if (compacted.length <= maxChars) return compacted;
@@ -196,95 +147,35 @@ function compactSummaryText(text: string, maxChars: number): string {
 function promptLineLimitForHeight(targetHeight: number, dataRows: number, historyRows: number): number {
   if (targetHeight <= 0) return MIN_PROMPT_LINE_LIMIT;
   const fixedRows = sectionRowCount(dataRows) + sectionRowCount(historyRows) + SECTION_FRAME_ROWS;
-  return Math.max(MIN_PROMPT_LINE_LIMIT, targetHeight - fixedRows);
+  return Math.max(1, targetHeight - fixedRows);
+}
+
+function historyLineLimitForHeight(targetHeight: number, dataRows: number): number | undefined {
+  if (targetHeight <= 0) return undefined;
+  const availableAfterData = targetHeight - sectionRowCount(dataRows) - SECTION_FRAME_ROWS;
+  return Math.max(1, availableAfterData - sectionRowCount(1));
 }
 
 function sectionRowCount(lineCount: number): number {
   return lineCount + SECTION_FRAME_ROWS;
 }
 
-function stepHistoryLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {
-  return cumulativeStepHistoryRows(state)
-    .slice(-STEP_HISTORY_LINE_LIMIT)
-    .map((step) => renderHistoryStep(step, width, theme));
+function stepHistoryLines(state: LoopRuntimeState, width: number, theme: Theme, maxLines?: number): string[] {
+  const entries = state.stepHistory ?? [];
+  if (entries.length === 0) return [theme.fg("dim", "No pi-loop-step messages recorded yet.")];
+  const firstRenderedIndex = maxLines !== undefined && entries.length > maxLines ? entries.length - maxLines : 0;
+  return entries.slice(firstRenderedIndex).map((entry, index) => renderHistoryStep(entry, firstRenderedIndex + index + 1, firstRenderedIndex + index === entries.length - 1 && state.active, width, theme));
 }
 
-function cumulativeStepHistoryRows(state: LoopRuntimeState): RuntimeStepRow[] {
-  const rows: RuntimeStepRow[] = [];
-  let index = 1;
-  const push = (label: string, status: RuntimeStepRow["status"], detail: string): void => {
-    rows.push({ index: index++, label, status, detail });
-  };
-
-  const hasConfig = state.startedAt !== null && state.goal !== null;
-  const setupStatus: RuntimeStepRow["status"] = hasConfig ? "done" : state.active ? "active" : "waiting";
-  push("parse config", setupStatus, state.goal ? `${state.maxTurns} turns, ${state.maxMinutes}m, ${state.maxRuns} run(s)` : "waiting for /loop goal");
-  push("capture context", setupStatus, state.targetContext ? `${state.targetContext.checks.length} checks` : "snapshot unavailable");
-  push("bounded research", setupStatus, "research lanes bounded by the loop cap");
-  push("persist log", setupStatus, "config and events persisted");
-  push("enable feedback", setupStatus, state.active ? "loop_feedback available" : "loop_feedback disabled");
-  push("kickoff prompt", setupStatus, "initial loop instructions sent");
-  push("inject guardrails", state.totalTurnsStarted > 0 ? "done" : "waiting", "goal, limits, hard rules, required evidence");
-
-  const renderedTurnCount = turnRowsToRender(state);
-  for (let globalTurn = 1; globalTurn <= renderedTurnCount; globalTurn++) {
-    const coordinates = turnCoordinates(state, globalTurn);
-    const detail = loopDetail(coordinates.run, coordinates.turn, globalTurn, state);
-    const activeAgent = state.currentTurnStartedAt !== null && globalTurn === state.totalTurnsStarted;
-    const scored = !activeAgent && turnScored(state, coordinates.run, coordinates.turn, globalTurn);
-    const pendingFeedback = state.pendingFeedbackTurn?.globalTurn === globalTurn;
-    const started = globalTurn <= state.totalTurnsStarted;
-    const completedPastTurn = globalTurn < state.totalTurnsStarted;
-    const future = !started;
-
-    push("start turn", future ? "waiting" : "done", detail);
-    push("agent work", future ? "waiting" : activeAgent ? "active" : "done", activeAgent ? "work in progress" : detail);
-    push("measure progress", future || activeAgent ? "waiting" : scored || pendingFeedback || completedPastTurn ? "done" : "active", scored ? "feedback recorded" : pendingFeedback ? "ready for loop_feedback" : "waiting for loop_feedback");
-    push("feedback", future ? "waiting" : scored || completedPastTurn ? "done" : pendingFeedback ? "active" : "waiting", scored || completedPastTurn ? "checkpoint recorded" : detail);
-  }
-
-  push("finishing pi-loop", finishingStepStatus(state), state.stopReason ?? "time, turn, run, and feedback checks");
-  return rows;
-}
-
-function turnRowsToRender(state: LoopRuntimeState): number {
-  if (state.totalTurnsStarted === 0) return 1;
-  const last = lastScore(state);
-  const currentTurnScored = state.currentTurnStartedAt === null && last !== null && (last.globalTurn ?? last.turn) >= state.totalTurnsStarted;
-  if (state.active && currentTurnScored && state.turnsStarted < state.maxTurns) return state.totalTurnsStarted + 1;
-  return state.totalTurnsStarted;
-}
-
-function turnCoordinates(state: LoopRuntimeState, globalTurn: number): { run: number; turn: number } {
-  const scored = state.results.find((entry) => (entry.globalTurn ?? entry.turn) === globalTurn);
-  if (scored) return { run: scored.run ?? 1, turn: scored.turn };
-  if (state.pendingFeedbackTurn?.globalTurn === globalTurn) return { run: state.pendingFeedbackTurn.run, turn: state.pendingFeedbackTurn.turn };
-  if (globalTurn === state.totalTurnsStarted) return { run: state.currentRun, turn: Math.max(1, state.turnsStarted) };
-  return { run: state.currentRun, turn: globalTurn };
-}
-
-function turnScored(state: LoopRuntimeState, run: number, turn: number, globalTurn: number): boolean {
-  return state.results.some((entry) => (entry.run ?? 1) === run && entry.turn === turn && (entry.globalTurn ?? entry.turn) === globalTurn);
-}
-
-function finishingStepStatus(state: LoopRuntimeState): RuntimeStepRow["status"] {
-  if (!state.active && state.stopReason) return "done";
-  if (state.active && state.turnsStarted >= state.maxTurns && state.currentTurnStartedAt === null && lastScore(state) !== null) return "active";
-  return "waiting";
-}
-
-function loopDetail(run: number, turn: number, globalTurn: number, state: LoopRuntimeState): string {
-  return `loop ${run}, turn ${turn}/${state.maxTurns}, total ${globalTurn}/${state.maxRuns * state.maxTurns}`;
-}
-
-function renderHistoryStep(step: RuntimeStepRow, width: number, theme: Theme): string {
-  const marker = step.status === "active" ? ">" : step.status === "done" ? " " : ".";
-  const status = step.status === "active" ? "now" : step.status === "done" ? "done" : "next";
-  const prefix = `${marker} ${String(step.index).padStart(2, "0")} ${pad(status, 5)} `;
-  const label = truncateToWidth(step.label, 18, "…", true);
+function renderHistoryStep(entry: LoopStepHistoryEntry, index: number, active: boolean, width: number, theme: Theme): string {
+  const marker = active ? ">" : " ";
+  const status = active ? "now" : "done";
+  const prefix = `${marker} ${String(index).padStart(2, "0")} ${pad(status, 5)} `;
+  const label = truncateToWidth(entry.step, 22, "…", true);
+  const detail = entry.detail ?? `loop ${entry.run}, turn ${entry.turn}, total ${entry.globalTurn}`;
   const detailWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(label) - 3);
-  const color = step.status === "active" ? "warning" : step.status === "done" ? "success" : "dim";
-  return truncateToWidth(theme.fg(color, prefix) + theme.fg("muted", label) + theme.fg("dim", ` - ${truncateToWidth(step.detail, detailWidth, "…", true)}`), width, "…", true);
+  const color = active ? "warning" : "success";
+  return truncateToWidth(theme.fg(color, prefix) + theme.fg("muted", label) + theme.fg("dim", ` - ${truncateToWidth(detail, detailWidth, "…", true)}`), width, "…", true);
 }
 
 function recentTurnLines(state: LoopRuntimeState, width: number, theme: Theme): string[] {

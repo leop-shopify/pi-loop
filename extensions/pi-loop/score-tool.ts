@@ -5,8 +5,8 @@ import { appendLogEntry } from "./log.ts";
 import type { LoopController } from "./controller.ts";
 import { refineNextActions } from "./feedback-refinement.ts";
 import { formatProgressPercent } from "./progress.ts";
-import { scoreLoopResult, type LoopScoreInput } from "./scoring-heuristics.ts";
-import { baselineScoreValue, bestScore, pauseLoopTimer, previousScoreValue, scoreEntryFromResult, type LoopRuntimeState } from "./state.ts";
+import { scoreLoopResult, type AcceptanceStatus, type LoopPlanTaskEvidence, type LoopScoreInput } from "./scoring-heuristics.ts";
+import { acceptanceReady, baselineScoreValue, bestScore, pauseLoopTimer, previousScoreValue, scoreEntryFromResult, type LoopRuntimeState } from "./state.ts";
 import { sendLoopStepMessage } from "./step-message.ts";
 import { LoopFeedbackParams } from "./tool-schema.ts";
 import { updateLoopWidget } from "./ui.ts";
@@ -17,6 +17,9 @@ interface LoopFeedbackInput {
   summary?: string;
   status?: FeedbackStatus;
   notes?: string;
+  acceptanceStatus?: AcceptanceStatus;
+  acceptanceCriteria?: string[];
+  planTasks?: LoopPlanTaskEvidence[];
   nextActions?: string[];
 }
 
@@ -33,11 +36,13 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
   pi.registerTool({
     name: controller.scoreToolName,
     label: "Record Loop Feedback",
-    description: "Record a lightweight pi-loop feedback checkpoint. The tool scores from the turn state and transcript; do not restate full verification evidence.",
-    promptSnippet: "Call loop_feedback at the end of each pi-loop turn with a tiny summary/status only.",
+    description: "Record a focused pi-loop feedback checkpoint. The tool scores from the turn state and transcript; do not restate full verification evidence.",
+    promptSnippet: "Call loop_feedback only after acceptance is confirmed with planTasks, then at the end of each normal pi-loop work turn.",
     promptGuidelines: [
-      "Use loop_feedback at the end of every pi-loop turn before claiming completion.",
-      "Keep the tool input tiny: summary, status, notes, and optionally short next actions.",
+      "Do not call loop_feedback for partial acceptance discovery, missing criteria, proposed criteria, or each ask_user answer.",
+      "Before normal work starts, use loop_feedback exactly once only when the user-confirmed acceptanceCriteria and trackable planTasks are ready.",
+      "After acceptance is confirmed, use loop_feedback at the end of every normal pi-loop work turn before claiming completion.",
+      "Keep the tool input focused: summary, status, notes, acceptanceStatus, acceptanceCriteria, planTasks, and optionally short next actions.",
       "Do not put artifacts, test matrices, design rubrics, Rails safety, audit details, or long verification evidence in this tool. Run that work during the loop or final refinement instead.",
     ],
     parameters: LoopFeedbackParams,
@@ -47,11 +52,21 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
         return { content: [{ type: "text", text: "No pi-loop goal is active. Start one with /loop <goal>." }], details: {} };
       }
 
+      const feedback = params as LoopFeedbackInput;
+      const gateAlreadyOpen = acceptanceReady(state);
+      const opensAcceptanceGate = !gateAlreadyOpen && feedbackConfirmsAcceptance(feedback);
+      if (!gateAlreadyOpen && !opensAcceptanceGate) {
+        return {
+          content: [{ type: "text", text: acceptanceDiscoveryNotScoreableMessage(feedback) }],
+          details: { acceptanceGate: "not_ready" },
+          terminate: false,
+        };
+      }
+
       recordFeedbackTurnDuration(state);
       pauseLoopTimer(state);
       controller.cancelPendingResume(state);
 
-      const feedback = params as LoopFeedbackInput;
       const scoreInput = buildFeedbackScoreInput(state, feedback, ctx);
       const result = scoreLoopResult({
         ...scoreInput,
@@ -61,7 +76,7 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
         baselineScore: baselineScoreValue(state),
         targetScore: state.targetScore,
       }, undefined, { cwd: ctx.cwd });
-      const nextActions = feedback.nextActions?.length ? refineNextActions(feedback.nextActions) : result.nextActions;
+      const nextActions = nextActionsForFeedback(feedback, scoreInput, result.nextActions);
       const feedbackTurn = state.pendingFeedbackTurn ?? { run: state.currentRun, turn: Math.max(1, state.turnsStarted), globalTurn: Math.max(1, state.totalTurnsStarted) };
       const entry = scoreEntryFromResult(feedbackTurn.turn, scoreInput.summary, { ...result, nextActions }, scoreInput.attempt, feedbackTurn.run, feedbackTurn.globalTurn);
       state.results.push(entry);
@@ -69,15 +84,40 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
       state.pendingFeedbackTurn = null;
       appendLogEntry(ctx.cwd, entry);
       updateAfterScore(ctx, state);
-      sendLoopStepMessage(pi, state, "feedback", formatProgressPercent(result.progressPercent), ctx.cwd);
+      sendLoopStepMessage(pi, state, opensAcceptanceGate ? "acceptance confirmed" : "feedback", opensAcceptanceGate ? "criteria confirmed with trackable plan" : formatProgressPercent(result.progressPercent), ctx.cwd);
 
       return {
-        content: [{ type: "text", text: formatScoreResponse({ ...result, nextActions }) }],
+        content: [{ type: "text", text: opensAcceptanceGate ? formatAcceptanceConfirmationResponse(scoreInput) : formatScoreResponse({ ...result, nextActions }) }],
         details: { result: { ...result, nextActions }, loopState: loopStateDetails(state) },
         terminate: true,
       };
     },
   });
+}
+
+function feedbackConfirmsAcceptance(feedback: LoopFeedbackInput): boolean {
+  return feedback.acceptanceStatus === "confirmed" && normalizeAcceptanceCriteria(feedback.acceptanceCriteria).length > 0 && normalizePlanTasks(feedback.planTasks).length > 0;
+}
+
+function acceptanceDiscoveryNotScoreableMessage(feedback: LoopFeedbackInput): string {
+  const status = feedback.acceptanceStatus ?? "missing";
+  return [
+    "Acceptance discovery is not a loop_feedback checkpoint yet.",
+    `Current acceptanceStatus: ${status}.`,
+    "Do not score partial discovery or each ask_user answer. Keep asking focused acceptance-planning questions, or use bounded research, until the user explicitly confirms clear acceptance criteria and you can record concrete planTasks.",
+    "When that is ready, call loop_feedback once with acceptanceStatus: \"confirmed\", acceptanceCriteria, and planTasks.",
+  ].join("\n");
+}
+
+function formatAcceptanceConfirmationResponse(scoreInput: LoopScoreInput): string {
+  const criteriaCount = scoreInput.attempt?.acceptanceCriteria?.length ?? 0;
+  const taskCount = scoreInput.attempt?.planTasks?.length ?? 0;
+  return [
+    "Acceptance planning recorded.",
+    `Confirmed acceptance criteria: ${criteriaCount}.`,
+    `Trackable plan tasks: ${taskCount}.`,
+    "The acceptance gate is open; continue with the first normal implementation/research task next.",
+  ].join("\n");
 }
 
 function updateAfterScore(ctx: ExtensionContext, state: LoopRuntimeState): void {
@@ -108,6 +148,12 @@ function buildFeedbackScoreInput(state: LoopRuntimeState, feedback: LoopFeedback
   const observations = observeTurnChecks(ctx, state);
   const artifacts = artifactsFromTargetContext(state);
   const summary = feedback.summary?.trim() || feedback.notes?.trim() || `Loop feedback recorded: ${status}.`;
+  const priorAttempt = state.results.at(-1)?.attempt;
+  const criteriaInput = feedback.acceptanceCriteria ?? priorAttempt?.acceptanceCriteria;
+  const legacyAcceptanceOpen = state.results[0]?.attempt?.acceptanceStatus === undefined && acceptanceReady(state) && feedback.acceptanceStatus === undefined && feedback.acceptanceCriteria === undefined && feedback.planTasks === undefined;
+  const acceptanceStatus = legacyAcceptanceOpen ? undefined : normalizeAcceptanceStatus(feedback.acceptanceStatus ?? priorAttempt?.acceptanceStatus, criteriaInput);
+  const acceptanceCriteria = legacyAcceptanceOpen ? [] : normalizeAcceptanceCriteria(criteriaInput);
+  const planTasks = legacyAcceptanceOpen ? [] : normalizePlanTasks(feedback.planTasks ?? priorAttempt?.planTasks);
   const checks = observations.map((check) => ({ ...check, required: check.kind !== "review", scope: "targeted" as const }));
   const passedTests = checks.filter((check) => check.status === "passed" && check.kind === "test");
   const testEvidenceFiles = passedTests.map((check) => check.command ?? check.name);
@@ -119,11 +165,7 @@ function buildFeedbackScoreInput(state: LoopRuntimeState, feedback: LoopFeedback
     goal: state.goal ?? "",
     summary,
     artifacts,
-    requirements: [{
-      description: "Loop turn produced usable feedback for the next refinement step.",
-      status: blocked ? "partial" : ready ? "met" : "partial",
-      evidence: feedback.notes ?? summary,
-    }],
+    requirements: legacyAcceptanceOpen ? legacyOpenRequirements({ blocked, ready, evidence: feedback.notes ?? summary }) : requirementsFromAcceptanceCriteria(acceptanceStatus ?? "missing", acceptanceCriteria, planTasks, { blocked, ready, evidence: feedback.notes ?? summary }),
     checks,
     tests: passedTests.length ? {
       files: testEvidenceFiles,
@@ -170,12 +212,137 @@ function buildFeedbackScoreInput(state: LoopRuntimeState, feedback: LoopFeedback
     risks: blocked ? [{ severity: "blocker", description: feedback.notes ?? "Loop turn reported blocked feedback.", resolved: false, kind: "operability" }] : [],
     attempt: {
       rationale: feedback.notes?.trim() || summary,
-      fullPlan: summarizeCurrentPrompt(state) || summary,
+      fullPlan: summarizePlanTasks(planTasks) || summarizeCurrentPrompt(state) || summary,
       actionsTaken: observations.map((check) => check.name),
+      ...(legacyAcceptanceOpen ? {} : { acceptanceStatus, acceptanceCriteria, planTasks }),
       stopIntent: status === "blocked" ? "blocked" : ready ? "claim_done" : "continue",
       reusedPriorPlan: false,
     },
   };
+}
+
+function normalizeAcceptanceStatus(status: AcceptanceStatus | undefined, criteria: string[] | undefined): AcceptanceStatus {
+  if (status) return status;
+  return criteria?.length ? "proposed" : "missing";
+}
+
+function normalizeAcceptanceCriteria(criteria: string[] | undefined): string[] {
+  return uniqueTrimmed(criteria ?? []);
+}
+
+function normalizePlanTasks(tasks: LoopPlanTaskEvidence[] | undefined): LoopPlanTaskEvidence[] {
+  return (tasks ?? [])
+    .map((task) => ({
+      id: cleanOptionalText(task.id),
+      title: cleanRequiredText(task.title),
+      status: task.status,
+      evidence: cleanOptionalText(task.evidence),
+    }))
+    .filter((task) => task.title.length > 0 && ["pending", "in_progress", "completed", "blocked"].includes(task.status));
+}
+
+function legacyOpenRequirements(options: { blocked: boolean; ready: boolean; evidence: string }): NonNullable<LoopScoreInput["requirements"]> {
+  return [{
+    description: "Legacy loop feedback remains scoreable without restarting acceptance discovery.",
+    status: options.blocked ? "partial" : options.ready ? "met" : "partial",
+    evidence: options.evidence,
+  }];
+}
+
+function requirementsFromAcceptanceCriteria(status: AcceptanceStatus, criteria: string[], tasks: LoopPlanTaskEvidence[], options: { blocked: boolean; ready: boolean; evidence: string }): NonNullable<LoopScoreInput["requirements"]> {
+  if (criteria.length === 0) {
+    return [{
+      id: "AC1",
+      description: "Discover acceptance criteria with the user before implementation work continues.",
+      status: "unknown",
+      critical: true,
+      evidence: "No acceptanceCriteria values were recorded in loop_feedback.",
+    }];
+  }
+
+  if (status !== "confirmed") {
+    return criteria.map((criterion, index) => ({
+      id: `AC${index + 1}`,
+      description: criterion,
+      status: "unknown",
+      critical: true,
+      evidence: `Acceptance criteria are ${status}; user confirmation is still required before planning or implementation.`,
+    }));
+  }
+
+  if (tasks.length === 0) {
+    return criteria.map((criterion, index) => ({
+      id: `AC${index + 1}`,
+      description: criterion,
+      status: "partial",
+      critical: true,
+      evidence: "Acceptance criteria are confirmed, but no trackable planTasks were recorded yet.",
+    }));
+  }
+
+  const allTasksComplete = tasks.every((task) => task.status === "completed");
+  const requirementStatus = options.ready && allTasksComplete ? "met" : options.blocked ? "partial" : "partial";
+  return criteria.map((criterion, index) => ({
+    id: `AC${index + 1}`,
+    description: criterion,
+    status: requirementStatus,
+    evidence: options.evidence,
+  }));
+}
+
+function summarizePlanTasks(tasks: LoopPlanTaskEvidence[]): string | undefined {
+  if (tasks.length === 0) return undefined;
+  return tasks.map((task) => `${task.id ? `${task.id}: ` : ""}${task.title} [${task.status}]${task.evidence ? ` — ${task.evidence}` : ""}`).join("; ");
+}
+
+function nextActionsForFeedback(feedback: LoopFeedbackInput, scoreInput: LoopScoreInput, fallback: string[]): string[] {
+  const hasStructuredAcceptance = scoreInput.attempt?.acceptanceStatus !== undefined || (scoreInput.attempt?.acceptanceCriteria?.length ?? 0) > 0 || (scoreInput.attempt?.planTasks?.length ?? 0) > 0;
+  const acceptanceStatus = scoreInput.attempt?.acceptanceStatus ?? "missing";
+  const acceptanceCriteria = scoreInput.attempt?.acceptanceCriteria ?? [];
+  const planTasks = scoreInput.attempt?.planTasks ?? [];
+  const planActions = hasStructuredAcceptance ? nextActionsFromPlanState(acceptanceStatus, acceptanceCriteria, planTasks) : [];
+  const explicitActions = feedback.nextActions?.length ? feedback.nextActions : [];
+  const actions = explicitActions.length ? [...explicitActions, ...planActions] : [...planActions, ...fallback];
+  return refineNextActions(actions);
+}
+
+function nextActionsFromPlanState(status: AcceptanceStatus, criteria: string[], tasks: LoopPlanTaskEvidence[]): string[] {
+  const actions: string[] = [];
+  if (status === "missing") actions.push("Ask contextual discovery questions to uncover acceptance criteria before implementation continues.");
+  if (status === "discovering") actions.push("Use bounded research or user discovery to produce candidate acceptance criteria for the user to choose from.");
+  if (status === "proposed" || (status !== "confirmed" && criteria.length > 0)) actions.push("Ask the user to select, adjust, or confirm the proposed acceptance criteria before building the implementation plan.");
+  if (status !== "confirmed") return actions;
+  if (tasks.length === 0) actions.push("Build a trackable task plan from the confirmed acceptance criteria before the next implementation slice.");
+  const blockedTask = tasks.find((task) => task.status === "blocked");
+  if (blockedTask) actions.push(`Unblock plan task${blockedTask.id ? ` ${blockedTask.id}` : ""}: ${blockedTask.title}.`);
+  const activeTask = tasks.find((task) => task.status === "in_progress");
+  if (activeTask) actions.push(`Finish current plan task${activeTask.id ? ` ${activeTask.id}` : ""}: ${activeTask.title}.`);
+  const pendingTask = tasks.find((task) => task.status === "pending");
+  if (!activeTask && pendingTask) actions.push(`Start next plan task${pendingTask.id ? ` ${pendingTask.id}` : ""}: ${pendingTask.title}.`);
+  if (tasks.length > 0 && tasks.every((task) => task.status === "completed")) actions.push("All recorded plan tasks are completed; verify the confirmed acceptance criteria or define the next plan slice.");
+  return actions;
+}
+
+function uniqueTrimmed(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const text = cleanRequiredText(value);
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+  }
+  return result;
+}
+
+function cleanRequiredText(value: string | undefined): string {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function cleanOptionalText(value: string | undefined): string | undefined {
+  const text = cleanRequiredText(value);
+  return text || undefined;
 }
 
 function artifactsFromTargetContext(state: LoopRuntimeState): LoopScoreInput["artifacts"] {
