@@ -139,6 +139,7 @@ export interface RiskEvidence {
 export interface LoopScoreInput {
   goal: string;
   summary: string;
+  domain?: { softwareProject?: boolean };
   artifacts?: ArtifactEvidence[];
   requirements?: RequirementEvidence[];
   checks?: CheckEvidence[];

@@ -73,7 +73,7 @@ export function isExecutableArtifact(artifact: ArtifactEvidence): boolean {
 
 export function hasProductionArtifacts(input: LoopScoreInput): boolean {
   const artifacts = input.artifacts ?? [];
-  if (artifacts.length === 0) return true;
+  if (artifacts.length === 0) return input.domain?.softwareProject ?? true;
   return artifacts.some(isExecutableArtifact);
 }
 

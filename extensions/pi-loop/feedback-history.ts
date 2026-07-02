@@ -1,10 +1,11 @@
 import { COMPACT_SCORE_TREND_LIMIT, DETAILED_RECENT_ATTEMPTS, MAX_FEEDBACK_HISTORY_CHARS } from "./constants.ts";
 import { feedbackMessageKey, refineNextActions } from "./feedback-refinement.ts";
+import { metricTrendLines } from "./metric-feedback.ts";
 import { bestProgressEntry, shortProgressPercent } from "./progress.ts";
 import { bestScore, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
 
 export function formatFeedbackHistory(state: LoopRuntimeState, maxChars = MAX_FEEDBACK_HISTORY_CHARS): string {
-  const sections = [scoreTrend(state.results), plateauAnalysis(state.results), bestAttempt(state), recentDetails(state), recurringBlockers(state)].filter(Boolean);
+  const sections = [scoreTrend(state.results), metricTrend(state), plateauAnalysis(state.results), bestAttempt(state), recentDetails(state), recurringBlockers(state)].filter(Boolean);
   const text = sections.join("\n\n");
   return text.length <= maxChars ? text : `${text.slice(0, maxChars - 12)}\n...truncated`;
 }
@@ -27,6 +28,12 @@ function compactTrend(results: LoopScoreEntry[]): LoopScoreEntry[] {
     seen.add(key);
     return true;
   });
+}
+
+function metricTrend(state: LoopRuntimeState): string {
+  const lines = metricTrendLines(state.targetContext?.objectives ?? [], state.results);
+  if (lines.length === 0) return "";
+  return ["Measured metric trend:", ...lines.map((line) => `- ${line}`)].join("\n");
 }
 
 function plateauAnalysis(results: LoopScoreEntry[]): string {
@@ -66,7 +73,8 @@ function recentDetails(state: LoopRuntimeState): string {
 
 function formatAttempt(entry: LoopScoreEntry): string {
   const gaps = entry.categories.flatMap((category) => (category.score / category.max < 0.8 ? (category.gaps ?? [`${category.key} ${category.score}/${category.max}`]).slice(0, 1) : []));
-  return `- r${entry.run ?? 1}t${entry.turn} ${shortProgressPercent(entry.progressPercent ?? null)}: blockers ${entry.blockers.map((blocker) => blocker.message).slice(0, 2).join("; ") || "none"}; gaps ${gaps.slice(0, 3).join("; ") || "none"}`;
+  const experiment = entry.hypothesis ? `; hypothesis: ${entry.hypothesis}${entry.verdict ? ` → ${entry.verdict}` : ""}` : entry.verdict ? `; verdict: ${entry.verdict}` : "";
+  return `- r${entry.run ?? 1}t${entry.turn} ${shortProgressPercent(entry.progressPercent ?? null)}: blockers ${entry.blockers.map((blocker) => blocker.message).slice(0, 2).join("; ") || "none"}; gaps ${gaps.slice(0, 3).join("; ") || "none"}${experiment}`;
 }
 
 function recurringBlockers(state: LoopRuntimeState): string {

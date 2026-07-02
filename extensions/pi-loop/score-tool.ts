@@ -4,6 +4,8 @@ import type { Message, TextContent } from "@earendil-works/pi-ai";
 import { appendLogEntry } from "./log.ts";
 import type { LoopController } from "./controller.ts";
 import { refineNextActions } from "./feedback-refinement.ts";
+import { formatMetricFeedback, verifyMetrics } from "./metric-feedback.ts";
+import { canonicalizeMetrics, normalizeMetrics, type MeasuredMetric } from "./objectives.ts";
 import { formatProgressPercent } from "./progress.ts";
 import { scoreLoopResult, type AcceptanceStatus, type LoopPlanTaskEvidence, type LoopScoreInput } from "./scoring-heuristics.ts";
 import { acceptanceReady, baselineScoreValue, bestScore, pauseLoopTimer, previousScoreValue, scoreEntryFromResult, type LoopRuntimeState } from "./state.ts";
@@ -20,6 +22,9 @@ interface LoopFeedbackInput {
   acceptanceStatus?: AcceptanceStatus;
   acceptanceCriteria?: string[];
   planTasks?: LoopPlanTaskEvidence[];
+  metrics?: MeasuredMetric[];
+  hypothesis?: string;
+  verdict?: "keep" | "discard";
   nextActions?: string[];
 }
 
@@ -42,7 +47,9 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
       "Do not call loop_feedback for partial acceptance discovery, missing criteria, proposed criteria, or each ask_user answer.",
       "Before normal work starts, use loop_feedback exactly once only when the user-confirmed acceptanceCriteria and trackable planTasks are ready.",
       "After acceptance is confirmed, use loop_feedback at the end of every normal pi-loop work turn before claiming completion.",
-      "Keep the tool input focused: summary, status, notes, acceptanceStatus, acceptanceCriteria, planTasks, and optionally short next actions.",
+      "Keep the tool input focused: summary, status, notes, acceptanceStatus, acceptanceCriteria, planTasks, optionally metrics, and optionally short next actions.",
+      "When the loop has numeric objectives (O1, O2, ...), report each measured value in metrics using the objective id as the name. Only report numbers produced by real commands this turn.",
+      "Record a one-line hypothesis for what this turn tested and a verdict (keep or discard) for whether the attempt should survive, so experiments stay comparable across turns.",
       "Do not put artifacts, test matrices, design rubrics, Rails safety, audit details, or long verification evidence in this tool. Run that work during the loop or final refinement instead.",
     ],
     parameters: LoopFeedbackParams,
@@ -67,7 +74,8 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
       pauseLoopTimer(state);
       controller.cancelPendingResume(state);
 
-      const scoreInput = buildFeedbackScoreInput(state, feedback, ctx);
+      const observations = observeTurnChecks(ctx, state);
+      const scoreInput = buildFeedbackScoreInput(state, feedback, observations);
       const result = scoreLoopResult({
         ...scoreInput,
         previousScore: previousScoreValue(state),
@@ -77,8 +85,15 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
         targetScore: state.targetScore,
       }, undefined, { cwd: ctx.cwd });
       const nextActions = nextActionsForFeedback(feedback, scoreInput, result.nextActions);
+      const objectives = state.targetContext?.objectives ?? [];
+      const metrics = canonicalizeMetrics(objectives, verifyMetrics(normalizeMetrics(feedback.metrics), observations));
+      const metricLines = formatMetricFeedback(objectives, state.results, metrics);
       const feedbackTurn = state.pendingFeedbackTurn ?? { run: state.currentRun, turn: Math.max(1, state.turnsStarted), globalTurn: Math.max(1, state.totalTurnsStarted) };
-      const entry = scoreEntryFromResult(feedbackTurn.turn, scoreInput.summary, { ...result, nextActions }, scoreInput.attempt, feedbackTurn.run, feedbackTurn.globalTurn);
+      const entry = scoreEntryFromResult(feedbackTurn.turn, scoreInput.summary, { ...result, nextActions }, scoreInput.attempt, feedbackTurn.run, feedbackTurn.globalTurn, {
+        metrics,
+        hypothesis: feedback.hypothesis?.replace(/\s+/g, " ").trim().slice(0, 300) || undefined,
+        verdict: feedback.verdict === "keep" || feedback.verdict === "discard" ? feedback.verdict : undefined,
+      });
       state.results.push(entry);
       state.unscoredConsecutiveTurns = 0;
       state.pendingFeedbackTurn = null;
@@ -87,7 +102,7 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
       sendLoopStepMessage(pi, state, opensAcceptanceGate ? "acceptance confirmed" : "feedback", opensAcceptanceGate ? "criteria confirmed with trackable plan" : formatProgressPercent(result.progressPercent), ctx.cwd);
 
       return {
-        content: [{ type: "text", text: opensAcceptanceGate ? formatAcceptanceConfirmationResponse(scoreInput) : formatScoreResponse({ ...result, nextActions }) }],
+        content: [{ type: "text", text: opensAcceptanceGate ? formatAcceptanceConfirmationResponse(scoreInput) : formatScoreResponse({ ...result, nextActions }, metricLines) }],
         details: { result: { ...result, nextActions }, loopState: loopStateDetails(state) },
         terminate: true,
       };
@@ -143,9 +158,8 @@ function recordFeedbackTurnDuration(state: LoopRuntimeState): void {
   state.currentTurnStartedAt = null;
 }
 
-function buildFeedbackScoreInput(state: LoopRuntimeState, feedback: LoopFeedbackInput, ctx: ExtensionContext): LoopScoreInput {
+function buildFeedbackScoreInput(state: LoopRuntimeState, feedback: LoopFeedbackInput, observations: ObservedCheck[]): LoopScoreInput {
   const status = feedback.status ?? "continue";
-  const observations = observeTurnChecks(ctx, state);
   const artifacts = artifactsFromTargetContext(state);
   const summary = feedback.summary?.trim() || feedback.notes?.trim() || `Loop feedback recorded: ${status}.`;
   const priorAttempt = state.results.at(-1)?.attempt;
@@ -164,6 +178,7 @@ function buildFeedbackScoreInput(state: LoopRuntimeState, feedback: LoopFeedback
   return {
     goal: state.goal ?? "",
     summary,
+    domain: { softwareProject: softwareProjectDomain(state) },
     artifacts,
     requirements: legacyAcceptanceOpen ? legacyOpenRequirements({ blocked, ready, evidence: feedback.notes ?? summary }) : requirementsFromAcceptanceCriteria(acceptanceStatus ?? "missing", acceptanceCriteria, planTasks, { blocked, ready, evidence: feedback.notes ?? summary }),
     checks,
@@ -345,6 +360,15 @@ function cleanOptionalText(value: string | undefined): string | undefined {
   return text || undefined;
 }
 
+function softwareProjectDomain(state: LoopRuntimeState): boolean {
+  const context = state.targetContext;
+  if (!context) return true;
+  const packageManagerKnown = context.baseline.packageManager !== undefined && context.baseline.packageManager !== "unknown";
+  const hasScripts = (context.baseline.scripts?.length ?? 0) > 0;
+  const hasCodeFiles = context.files.some((file) => file.exists && file.kind !== "docs");
+  return packageManagerKnown || hasScripts || hasCodeFiles || context.checks.length > 0;
+}
+
 function artifactsFromTargetContext(state: LoopRuntimeState): LoopScoreInput["artifacts"] {
   return (state.targetContext?.files ?? [])
     .filter((file) => file.exists)
@@ -462,7 +486,7 @@ function priorAttemptPlans(state: LoopRuntimeState): string[] {
   return state.results.map((entry) => entry.attempt?.fullPlan?.trim()).filter((plan): plan is string => Boolean(plan));
 }
 
-export function formatScoreResponse(result: ReturnType<typeof scoreLoopResult>): string {
+export function formatScoreResponse(result: ReturnType<typeof scoreLoopResult>, metricLines: string[] = []): string {
   const blockerLines = result.blockers.length ? result.blockers.map((blocker) => `- ${blocker.severity}: ${blocker.message}`).join("\n") : "none";
   const nextActions = refineNextActions(result.nextActions, "Choose a materially different next action and score again.");
   const nextLines = nextActions.length ? nextActions.map((action) => `- ${action}`).join("\n") : "none";
@@ -473,6 +497,7 @@ export function formatScoreResponse(result: ReturnType<typeof scoreLoopResult>):
   return [
     `Progress: ${progress} (${status})`,
     `Outcome: ${result.outcome}`,
+    ...(metricLines.length ? ["Measured metrics:", metricLines.map((line) => `- ${line}`).join("\n")] : []),
     "Blockers:",
     blockerLines,
     "Verifier findings:",

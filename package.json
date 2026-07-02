@@ -1,6 +1,6 @@
 {
   "name": "pi-loop",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "description": "Pi extension for bounded, score-guided software engineering loops.",
   "keywords": [

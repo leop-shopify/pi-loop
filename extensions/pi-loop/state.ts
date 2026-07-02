@@ -1,4 +1,5 @@
 import { DEFAULT_MINUTES, DEFAULT_RUNS, DEFAULT_TARGET, DEFAULT_TURNS } from "./constants.ts";
+import type { MeasuredMetric } from "./objectives.ts";
 import type { TargetContextSnapshot } from "./target-context.ts";
 import type { AttemptEvidence, EvidenceVerificationFinding, LoopFeedbackOutcome, LoopScoreResult } from "./scoring-heuristics.ts";
 
@@ -95,6 +96,15 @@ export interface LoopScoreEntry {
   verifierFindings?: EvidenceVerificationFinding[];
   attempt?: AttemptEvidence;
   result?: LoopScoreResult;
+  metrics?: MeasuredMetric[];
+  hypothesis?: string;
+  verdict?: "keep" | "discard";
+}
+
+export interface LoopScoreEntryExtras {
+  metrics?: MeasuredMetric[];
+  hypothesis?: string;
+  verdict?: "keep" | "discard";
 }
 
 export interface LoopEventEntry {
@@ -263,6 +273,22 @@ export function acceptanceReady(state: LoopRuntimeState): boolean {
   return acceptanceReadyTurn(state) !== null;
 }
 
+export function completionClaimed(state: LoopRuntimeState): boolean {
+  const attempt = lastScore(state)?.attempt;
+  if (!attempt || attempt.stopIntent !== "claim_done" || !acceptanceReady(state)) return false;
+  const tasks = attempt.planTasks ?? [];
+  return tasks.length > 0 && tasks.every((task) => task.status === "completed");
+}
+
+export function confirmationPassCount(state: LoopRuntimeState): number {
+  let count = 0;
+  for (let index = state.results.length - 1; index >= 0; index--) {
+    if (state.results[index].attempt?.stopIntent !== "claim_done") break;
+    count++;
+  }
+  return count;
+}
+
 export function normalWorkStarted(state: LoopRuntimeState): boolean {
   return normalTurnsStarted(state) > 0;
 }
@@ -297,6 +323,6 @@ export function stopLoop(state: LoopRuntimeState, reason: string): void {
   }
 }
 
-export function scoreEntryFromResult(turn: number, summary: string, result: LoopScoreResult, attempt?: AttemptEvidence, run = 1, globalTurn = turn): LoopScoreEntry {
-  return { type: "score", schemaVersion: 2, run, turn, globalTurn, timestamp: Date.now(), summary, score: result.score, rawScore: result.rawScore, targetScore: result.targetScore, baselineScore: result.baselineScore, progressPercent: result.progressPercent, passedDefinition: result.passedDefinition, improvement: result.improvement, blockers: result.blockers.map((blocker) => ({ severity: blocker.severity, message: blocker.message, evidence: blocker.evidence })), strengths: result.strengths, nextActions: result.nextActions, categories: result.categories.map((category) => ({ key: category.key, label: category.label, score: category.score, max: category.max, evidence: category.evidence, gaps: category.gaps })), outcome: result.outcome, verifierFindings: result.verifierFindings, attempt, result };
+export function scoreEntryFromResult(turn: number, summary: string, result: LoopScoreResult, attempt?: AttemptEvidence, run = 1, globalTurn = turn, extras: LoopScoreEntryExtras = {}): LoopScoreEntry {
+  return { type: "score", schemaVersion: 2, run, turn, globalTurn, timestamp: Date.now(), summary, score: result.score, rawScore: result.rawScore, targetScore: result.targetScore, baselineScore: result.baselineScore, progressPercent: result.progressPercent, passedDefinition: result.passedDefinition, improvement: result.improvement, blockers: result.blockers.map((blocker) => ({ severity: blocker.severity, message: blocker.message, evidence: blocker.evidence })), strengths: result.strengths, nextActions: result.nextActions, categories: result.categories.map((category) => ({ key: category.key, label: category.label, score: category.score, max: category.max, evidence: category.evidence, gaps: category.gaps })), outcome: result.outcome, verifierFindings: result.verifierFindings, attempt, result, metrics: extras.metrics?.length ? extras.metrics : undefined, hypothesis: extras.hypothesis, verdict: extras.verdict };
 }

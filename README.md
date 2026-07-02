@@ -133,7 +133,7 @@ Defaults:
 5. `loop_feedback` is activated for the session.
 6. pi-loop requests a daemon-ish ACE run through `pi-ace-adapter` when ACE storage is enabled and the selected playbook exists. The loop does not wait for ACE completion; output and metadata paths are logged.
 7. A kickoff prompt is sent as a normal user message. It includes the context snapshot, compact ACE context when enabled, acceptance-discovery guidance, bounded research/delegation guidance, and instructions to record acceptance status, candidate or confirmed criteria, and plan-task state for the next refined prompt.
-8. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules for the work itself, and bounded delegation rules.
+8. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules for the work itself, bounded delegation rules, and — once recorded — the confirmed acceptance criteria and current plan-task statuses. Because this add-on is rebuilt from persisted state on every turn, the loop's contract survives session compaction: nothing the loop needs lives only in old conversation turns.
 9. On `agent_start`, pi-loop increments the turn counter, appends a `turn_started` event, and records how many score entries existed before the turn.
 10. The agent works with normal Pi tooling. pi-loop does not sandbox tools or prescribe the implementation path, and spawned-agent data collection remains part of the same loop cap.
 11. Before claiming completion, the agent must call `loop_feedback` with only a concise `summary`, `status`, `notes`, `acceptanceStatus`, compact `acceptanceCriteria`, compact `planTasks`, and optional short `nextActions`.
@@ -188,6 +188,9 @@ The feedback input is intentionally focused. The model should not restate artifa
     status: "pending" | "in_progress" | "completed" | "blocked";
     evidence?: string;
   }>;
+  metrics?: Array<{ name: string; value: number; unit?: string; sourceCommand?: string }>;
+  hypothesis?: string;
+  verdict?: "keep" | "discard";
   nextActions?: string[];
 }
 ```
@@ -202,9 +205,29 @@ Field meanings:
 | `acceptanceStatus` | Whether criteria are missing, being discovered, proposed for user selection, or confirmed by the user. |
 | `acceptanceCriteria` | Candidate or confirmed observable criteria. Proposed criteria are not final until the user confirms/selects them. |
 | `planTasks` | Task plan with statuses used to choose the next verifiable slice after criteria are confirmed. |
+| `metrics` | Measured values for the loop's numeric objectives, produced by real commands run this turn. Use the objective id (`O1`, `O2`, ...) as the metric name when one matches; names matching an objective are canonicalized to its id and compatible units are converted to the objective's unit so the metric history stays one series. A metric is verified only when its value appears in tool output observed this turn; `sourceCommand` is recorded as provenance. Unverified metrics are labeled and excluded from baselines and trends. |
+| `hypothesis` | One-line statement of what this turn's attempt tested. Persisted per turn and echoed in continuation prompts so experiments stay comparable. |
+| `verdict` | Whether the attempt should survive: `keep` or `discard`. |
 | `nextActions` | Optional short actions for the next refined prompt. |
 
 The internal scorer still applies hard caps, but it builds the scoring input internally from existing context and tool history instead of asking the model to generate a huge schema every turn.
+
+### Numeric objectives from goal text
+
+`/loop` parses measurable numbers out of the goal text into structured objectives stored on the target context snapshot. Supported phrasings include percent changes ("reduce bundle size by 20%"), max thresholds ("keep p95 under 200ms"), min thresholds ("coverage at least 90%"), and explicit baselines ("cut test runtime from 40s to 25s").
+
+Each objective gets a stable id (`O1`, `O2`, ...), a metric label, a direction, a target value, and a unit. The kickoff and continuation prompts instruct the agent to measure a real baseline for every objective with a command in the first work turn and to report the current value through `loop_feedback.metrics` each turn. The feedback response then shows measured deltas against the baseline and whether each objective's target is met, the continuation prompt carries a measured metric trend, and every measured value is persisted on the score entries in `log.jsonl` so metric history survives session restores. Objectives that never received a measured baseline are called out explicitly in later prompts.
+
+Reported metrics are not blindly trusted: a metric counts as verified only when its value appears in the bash/tool output pi-loop observed during the turn; the optional `sourceCommand` is recorded as provenance but cannot verify a value by itself. Unverified metrics are still recorded, but they are labeled `[unverified — no matching command output observed this turn]` in the feedback response and excluded from baselines, metric trends, and the reported-objective check, so a fabricated number cannot become the baseline and later prompts keep asking for a real measurement. Values reported in a unit compatible with the objective's unit (time or size families) are converted to the objective unit before comparison; incompatible units are reported as `not comparable` instead of producing a false target status.
+
+Once a metric has three or more verified measurements, the trend line adds a MAD-based confidence score — how the best improvement compares to the series' noise floor. Below 1x noise the prompt advises re-measuring before trusting the gain; 1–2x is marked marginal.
+
+Example:
+
+```text
+Measured metrics:
+- O1 bundle size: 480kb (-7.7% vs baseline 520kb) — O1 target keep at or under 500kb: met
+```
 
 ## Output structure
 
@@ -304,10 +327,14 @@ The runtime step table is the live version of the core loop orchestration steps:
 Behavior:
 
 1. Run 1 starts with the normalized target context.
-2. If a run reaches its turn limit, pi-loop appends `run_stopped`, starts the next run, and asks for a genuinely different plan.
+2. If a run reaches its turn limit, pi-loop appends `run_stopped`, starts the next run, and asks for a genuinely different plan — unless the previous run ended in a claimed completion, in which case the next run becomes an independent confirmation audit of that claim.
 3. Scoring improvements are retained as best-so-far feedback but do not stop remaining runs.
 4. If all runs exhaust, the stop reason reports the best progress and run.
 5. `/loop off` stops all runs.
+
+### Confirmation passes after a completion claim
+
+A completion claim is not the end of the loop; it changes what the remaining budget is spent on. When a `loop_feedback` checkpoint has `status: "ready_for_review"` with confirmed acceptance criteria and every plan task completed, the next continuation prompt becomes a confirmation pass instead of an exploration prompt: re-verify each acceptance criterion with fresh evidence produced that turn, exercise the result end-to-end the way the user would, and actively try to falsify the claim — with no new features or scope allowed. Each surviving pass increments the pass counter and asks for a different falsification angle (cleaner environment, different user path, the criterion most likely to hide a gap). If any criterion fails, the agent reopens the relevant plan tasks and the loop returns to normal iteration automatically. With `--runs > 1`, a run that ends in a claimed completion turns the next run into an independent confirmation audit instead of a "genuinely different plan" attempt.
 
 ### Premature-stop handling
 
@@ -420,6 +447,8 @@ Internal category weights:
 | Verification and gates | 12 |
 | Automated review gates | 10 |
 | Operational hardening | 5 |
+
+Scoring is domain-aware: when the target context shows no software project (no package manager, scripts, code files, or checks) and no code artifacts are touched, the code-centric rule families (review gates, test quality, verification commands, Rails safety) stay silent instead of raising irrelevant blockers on non-code goals. The moment real code artifacts appear, those caps apply regardless of the domain hint, so the relaxation cannot be used to dodge them.
 
 Hard caps lower the internal measurement when requirements are missing, inferred artifacts are absent or unverifiable, verification is missing, review gates are missing or failed, tests are mock-only, owned code is mocked, tests are implementation-coupled, mock status is unstated, Rails evidence contradicts touched paths, critical security/auth/data risks remain unresolved, or loop behavior is unbounded. The user-facing loop progress is still only percent improvement over the first feedback attempt.
 
@@ -593,6 +622,8 @@ Pi session_start
 ```text
 extensions/pi-loop/index.ts                  extension entrypoint
 extensions/pi-loop/target-context.ts         normalized target context snapshot
+extensions/pi-loop/objectives.ts             numeric objective extraction from goal text
+extensions/pi-loop/metric-feedback.ts        measured-metric feedback and trend lines
 extensions/pi-loop/feedback-history.ts       compact score-history feedback
 extensions/pi-loop/premature-stop.ts         completion-claim detection
 extensions/pi-loop/run-manager.ts            sequential best-of-K run helpers

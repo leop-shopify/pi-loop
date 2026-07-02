@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { extractNumericObjectives, formatNumericObjectives, type NumericObjective } from "./objectives.ts";
 import type { LoopScoreEntry } from "./state.ts";
 
 export type TargetSource = "explicit" | "goal" | "history";
@@ -15,6 +16,7 @@ export interface TargetContextSnapshot {
   goal: { raw: string; normalized: string };
   files: Array<{ path: string; source: TargetSource; exists: boolean; kind?: TargetFileKind; sizeBytes?: number; mtimeMs?: number; sha256?: string }>;
   symbols: Array<{ name: string; source: TargetSource; file?: string }>;
+  objectives?: NumericObjective[];
   checks: Array<{ name: string; command: string; source: "explicit" | "package_script" | "inferred" | "history"; required: boolean }>;
   baseline: { cwd: string; git?: { branch?: string; head?: string; dirtyCount: number; dirtyFingerprint?: string }; packageManager?: "pnpm" | "npm" | "yarn" | "bun" | "unknown"; scripts?: string[] };
   history: { previousLoopCount: number; recentScores: Array<{ score: number; targetScore: number; timestamp: number; summary: string }>; bestPreviousScore?: { score: number; targetScore: number; timestamp: number; summary: string } };
@@ -44,6 +46,7 @@ export function buildTargetContextSnapshot(options: TargetContextOptions): Targe
     goal: { raw: options.goal, normalized: normalizeGoal(options.goal) },
     files,
     symbols: unique([...(options.symbols ?? []).map((name) => ({ name, source: "explicit" as const })), ...extractGoalSymbols(options.goal).map((name) => ({ name, source: "goal" as const }))], (item) => item.name),
+    objectives: extractNumericObjectives(options.goal),
     checks: normalizeChecks(options.checks ?? [], scripts, packageManager),
     baseline: { cwd: options.cwd, git: gitBaseline(options.cwd), packageManager, scripts },
     history: { previousLoopCount: options.priorScores?.length ?? 0, recentScores, bestPreviousScore },
@@ -61,6 +64,7 @@ export function formatTargetContext(snapshot: TargetContextSnapshot, maxChars = 
     `- git: ${snapshot.baseline.git?.branch ?? "unknown"}${snapshot.baseline.git?.head ? ` @ ${snapshot.baseline.git.head}` : ""}; dirty ${snapshot.baseline.git?.dirtyCount ?? 0}`,
     `- files: ${snapshot.files.length ? snapshot.files.map((file) => `${file.path}${file.exists ? "" : " (missing)"}`).join(", ") : "none normalized"}`,
     `- symbols: ${snapshot.symbols.length ? snapshot.symbols.map((symbol) => symbol.name).join(", ") : "none normalized"}`,
+    `- measurable objectives: ${snapshot.objectives?.length ? `\n${indent(formatNumericObjectives(snapshot.objectives))}` : "none parsed from goal text"}`,
     `- checks: ${snapshot.checks.length ? snapshot.checks.map((check) => check.command).join("; ") : "none normalized"}`,
     `- previous feedback attempts: ${snapshot.history.recentScores.length ? String(snapshot.history.recentScores.length) : "none"}`,
   ];
@@ -137,6 +141,10 @@ function classifyFile(filePath: string): TargetFileKind {
   if (/^bin\/|^scripts\//.test(filePath)) return "script";
   if (/generated|dist\//.test(filePath)) return "generated";
   return "source";
+}
+
+function indent(text: string): string {
+  return text.split("\n").map((line) => `  ${line}`).join("\n");
 }
 
 function normalizeGoal(goal: string): string {

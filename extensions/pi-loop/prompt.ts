@@ -1,8 +1,10 @@
 import { formatFeedbackHistory } from "./feedback-history.ts";
 import { refineNextActions } from "./feedback-refinement.ts";
+import { unreportedObjectives } from "./metric-feedback.ts";
+import { formatNumericObjectives } from "./objectives.ts";
 import { runBudgetText } from "./run-manager.ts";
 import { scoringRubricSummary } from "./scoring-heuristics.ts";
-import { acceptanceReady, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
+import { acceptanceReady, completionClaimed, confirmationPassCount, type LoopRuntimeState, type LoopScoreEntry } from "./state.ts";
 import { formatTargetContext } from "./target-context.ts";
 
 export interface LoopPromptOptions {
@@ -14,6 +16,7 @@ export function kickoffPrompt(state: LoopRuntimeState, options: LoopPromptOption
     `Start the pi-loop workflow for this goal: ${state.goal ?? ""}`,
     acceptanceCriteriaGateInstruction(),
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
+    objectivesInstruction(state),
     promptAceContext(options),
     boundedResearchDelegationInstruction(),
     "Then implement or investigate using any Pi tools that are useful only after the user-confirmed acceptance criteria exist and the current plan has trackable tasks.",
@@ -26,6 +29,7 @@ export function kickoffPrompt(state: LoopRuntimeState, options: LoopPromptOption
 
 export function continuePrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
   if (!acceptanceReady(state)) return acceptancePlanningPrompt(state, options);
+  if (completionClaimed(state)) return confirmationPassPrompt(state, options);
 
   const last = state.results[state.results.length - 1];
   const scoreLine = last ? `Last progress: ${formatProgress(last.progressPercent ?? null)}.` : "No baseline has been recorded yet; the first loop_feedback call records it.";
@@ -36,6 +40,7 @@ export function continuePrompt(state: LoopRuntimeState, options: LoopPromptOptio
     "Continue the pi-loop workflow with a refined prompt, not a passive retry.",
     `Goal: ${state.goal ?? ""}`,
     scoreLine,
+    objectivesInstruction(state),
     refinementObservation(state),
     formatFeedbackHistory(state),
     planStateForPrompt(state),
@@ -49,6 +54,30 @@ export function continuePrompt(state: LoopRuntimeState, options: LoopPromptOptio
     "Strategy rule: use ACE context and feedback-scoring output to choose a different, verifiable slice. Do not repeat the same plan, evidence, or checks unless you explain why reuse is necessary.",
     "Progress is feedback only; verify one slice, record loop_feedback, and carry unfinished work or partial research into the next feedback attempt.",
     "At the end of this turn, call loop_feedback with a focused summary/status/notes checkpoint plus acceptanceStatus, acceptanceCriteria, and planTasks when available. Keep hardening, verification, and audit work in normal loop actions or final refinement, not in the feedback tool input.",
+  ].join("\n\n");
+}
+
+function confirmationPassPrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
+  const last = state.results.at(-1);
+  const criteria = last?.attempt?.acceptanceCriteria?.filter(Boolean) ?? [];
+  const pass = confirmationPassCount(state);
+  return [
+    `Completion has been claimed for this loop. This turn is confirmation pass #${pass}: independently re-verify the claim instead of starting new work.`,
+    `Goal: ${state.goal ?? ""}`,
+    criteria.length ? ["Acceptance criteria to re-verify one by one:", ...criteria.map((criterion, index) => `- AC${index + 1}: ${criterion}`)].join("\n") : "Acceptance criteria to re-verify: recover them from the confirmed plan in the feedback history.",
+    objectivesInstruction(state),
+    formatFeedbackHistory(state),
+    promptAceContext(options),
+    [
+      "Confirmation rules:",
+      "- Produce fresh evidence this turn for every criterion: re-run the real checks, exercise the result end-to-end the way the user would, and actively try to falsify the claim (edge cases, clean state, missed criteria, stale artifacts).",
+      "- Do not add features, refactors, or new scope during a confirmation pass.",
+      "- If every criterion holds with fresh evidence, call loop_feedback with status ready_for_review, keep all planTasks completed, and put the per-criterion evidence in the task evidence fields.",
+      "- If any criterion fails or its evidence is stale, reopen the relevant planTasks (pending or in_progress), call loop_feedback with status continue, and fix the gap in the following turns.",
+      "- When delegation tooling is available, run at least one confirmation as an independent audit lane: spawn a read-only agent with the acceptance criteria, the exact artifacts to inspect, and a report deadline inside the loop cap; treat its report as review evidence and do lead-owned falsification in parallel. If no delegation tooling exists, do the independent re-verification yourself from a clean state.",
+      pass >= 2 ? "- This claim has already survived at least one confirmation pass. Vary the angle: verify in a cleaner environment, as a different user path, or against the criteria most likely to hide a gap." : undefined,
+    ].filter(Boolean).join("\n"),
+    `Budget: ${runBudgetText(state)}.`,
   ].join("\n\n");
 }
 
@@ -90,6 +119,17 @@ export function delegationPendingPrompt(state: LoopRuntimeState): string {
 }
 
 export function nextRunPrompt(state: LoopRuntimeState, options: LoopPromptOptions = {}): string {
+  if (completionClaimed(state)) {
+    return [
+      "Start the next pi-loop run as an independent confirmation audit: the previous run claimed completion, so assume nothing from it.",
+      `Goal: ${state.goal ?? ""}`,
+      "Audit rules: re-verify every confirmed acceptance criterion with fresh evidence produced in this run, exercise the result end-to-end as the user would, and try to falsify the claim before doing any new work. If a criterion fails, reopen its planTasks and fix it; if everything holds, record loop_feedback with status ready_for_review and the fresh per-criterion evidence.",
+      formatFeedbackHistory(state),
+      planStateForPrompt(state),
+      promptAceContext(options),
+      `Budget: ${runBudgetText(state)}.`,
+    ].join("\n\n");
+  }
   return [
     "Start the next pi-loop run for the same goal with a refined strategy.",
     `Goal: ${state.goal ?? ""}`,
@@ -110,9 +150,12 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
     `Goal: ${state.goal ?? ""}`,
     `Limits: ${state.maxMinutes} minutes, ${state.maxTurns} turns per run, and ${state.maxRuns} run(s). Defaults are 10 minutes, 12 turns, and 1 run unless the user configured otherwise; minutes are capped at 10.`,
     state.targetContext ? formatTargetContext(state.targetContext) : "Target context snapshot: unavailable",
+    objectivesInstruction(state),
     acceptanceInstructionForCurrentState(state),
+    state.results.length > 0 ? planStateForPrompt(state) : undefined,
     boundedResearchDelegationInstruction(),
     "A loop turn starts when the agent begins work and ends when it records a focused loop_feedback checkpoint. The extension treats the first feedback turn as a hidden baseline and keeps using feedback until a configured limit or user stop is reached.",
+    completionClaimed(state) ? "A completion claim is currently under confirmation: this turn must re-verify the confirmed acceptance criteria with fresh evidence instead of adding scope. Reopen planTasks if any criterion fails." : undefined,
     "You may use any active Pi tools needed to solve the goal. The extension does not sandbox your tool choices, so be disciplined and produce evidence.",
     "You must call loop_feedback before presenting a completion claim.",
     "Keep loop_feedback focused. Before acceptance is confirmed, do not call it for missing/discovering/proposed criteria or partial ask_user answers. After the gate is open, use acceptanceStatus, acceptanceCriteria, and planTasks for compact loop state, not as a massive verification, artifact, design, Rails, or audit report; those checks happen during normal work or final refinement.",
@@ -182,6 +225,21 @@ function acceptanceIsConfirmed(state: LoopRuntimeState): boolean {
   return acceptanceReady(state);
 }
 
+function objectivesInstruction(state: LoopRuntimeState): string | undefined {
+  const objectives = state.targetContext?.objectives ?? [];
+  if (objectives.length === 0) return undefined;
+  const missing = unreportedObjectives(objectives, state.results);
+  const lines = [
+    "Measurable objectives parsed from the goal:",
+    formatNumericObjectives(objectives),
+    "Objective measurement rule: every reported number must come from a real command run this turn. Measure a baseline for each objective in the first work turn after acceptance is confirmed, then report the current value for each objective in loop_feedback metrics (use the objective id, e.g. O1, as the metric name). Real measured deltas against these objectives are the primary progress signal.",
+  ];
+  if (state.results.length > 0 && missing.length > 0) {
+    lines.push(`Objectives still missing a measured baseline: ${missing.map((objective) => objective.id).join(", ")}. Measure them with real commands before more implementation.`);
+  }
+  return lines.join("\n");
+}
+
 function promptAceContext(options: LoopPromptOptions): string | undefined {
   return options.aceContext?.trim() ? options.aceContext.trim() : undefined;
 }
@@ -225,6 +283,7 @@ function whatWasTried(entry: LoopScoreEntry): string {
   const tried = attempt?.actionsTaken?.length ? attempt.actionsTaken.join("; ") : entry.summary;
   return [
     `What was tried: ${tried}`,
+    entry.hypothesis ? `Previous hypothesis: ${entry.hypothesis}${entry.verdict ? ` (verdict: ${entry.verdict})` : ""}` : undefined,
     attempt?.fullPlan ? `Previous plan: ${attempt.fullPlan}` : undefined,
     attempt?.rationale ? `Previous rationale: ${attempt.rationale}` : undefined,
   ].filter(Boolean).join("\n");
