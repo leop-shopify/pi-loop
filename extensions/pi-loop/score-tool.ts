@@ -56,7 +56,7 @@ export function registerScoreTool(pi: ExtensionAPI, controller: LoopController):
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const state = controller.getState(ctx);
       if (!state.goal) {
-        return { content: [{ type: "text", text: "No pi-loop goal is active. Start one with /loop <goal>." }], details: {} };
+        return { content: [{ type: "text", text: "No intelligent Goal is active. Start one with /goal <objective>." }], details: {} };
       }
 
       const feedback = params as LoopFeedbackInput;

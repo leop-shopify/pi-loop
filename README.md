@@ -1,671 +1,238 @@
 # pi-loop
 
-`pi-loop` is a Pi extension for bounded, progress-guided software engineering loops. The first lightweight feedback turn becomes the hidden baseline; later turns use scoring as feedback and keep exploring until configured safety limits or the user stops the loop. Continuation prompts can enrich the next attempt with a compact ACE playbook from `pi-ace-adapter` when project ACE storage is enabled.
+`pi-loop` is one Pi package for three work modes:
 
-It is meant for quality work where “looks done” is not enough: test improvement, refactors, Rails hardening, verification cleanup, review-gate fixes, and similar engineering tasks.
-
-## Screenshot
-
-![pi-loop running in Pi with the progress panel and step history](docs/images/pi-loop-running.png)
-
-## What the package installs
-
-This package registers pi-loop plus the bundled ACE adapter resources:
-
-```json
-{
-  "pi": {
-    "extensions": [
-      "./node_modules/pi-ace-adapter/dist/index.js",
-      "./extensions/pi-loop/index.ts"
-    ],
-    "skills": ["./node_modules/pi-ace-adapter/skills"],
-    "prompts": ["./node_modules/pi-ace-adapter/prompts"]
-  }
-}
-```
-
-The extensions add:
-
-| Surface | Name | Purpose |
+| Mode | Driver | Command |
 | --- | --- | --- |
-| Command | `/loop` | Starts, stops, clears, and reports loop status. |
-| Tool | `loop_feedback` | Records a focused turn checkpoint plus compact acceptance criteria and plan-task state; pi-loop scores from target context and existing tool history, not a large model-supplied evidence object. |
-| UI | floating right-side panel | Shows runtime data, current prompt, timing, tokens, and bounded step history. |
-| State | `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` | Persists loop config, internal measurements, progress entries, and stop events in Pi's global agent directory. Active loops are bound to the Pi session that started them. |
+| Goal | Bounded intelligent iteration and evidence feedback | `/goal <objective>` |
+| Loop | Time | `/loop <interval> <prompt>` |
+| Plan | Read-only exploration and milestones | `/plan <request>` |
+
+The modes share one runtime and arbitrate ownership internally. A scheduled run cannot start while Goal or Plan is active, and Goal or Plan cannot start while a scheduled run is executing.
 
 ## Install
 
-### ACE adapter dependency
-
-This branch expects the sibling checkout `~/Poetry/pi-ace-adapter` and declares it as `pi-ace-adapter: file:../pi-ace-adapter` for local development. Keep the two checkouts side by side when installing locally. Before publishing or installing from a remote, replace that file dependency with the adapter's git or registry spec. pi-loop loads the adapter extension resources from `node_modules`, imports the stable `pi-ace-adapter/context` resolver, and launches ACE through the adapter's daemon-style runner.
-
-Local development install:
-
 ```bash
-pi install ~/src/pi-loop
+pi install /absolute/path/to/pi-loop
 ```
 
-Temporary one-off run without installing:
+For a project-local install:
 
 ```bash
-pi -e ~/src/pi-loop
+pi install -l /absolute/path/to/pi-loop
 ```
 
-Use the package directory, not only `extensions/pi-loop/index.ts`, so Pi also loads the ACE adapter extension, `/ace` commands, skills, prompts, and daemon-launch event listener.
+## Intelligent Goals
 
-After publishing to a git remote, install with:
-
-```bash
-pi install https://github.com/<owner>/pi-loop
-```
-
-For project-local installation, run the install command from the target repository with `-l`:
-
-```bash
-pi install -l ~/src/pi-loop
-```
-
-## Commands
+Goal mode preserves the original score-guided pi-loop engine and floating progress panel.
 
 ```text
-/loop <goal>
-/loop <goal> --minutes=10 --turns=12 --runs=2
+/goal Improve source.ts
+/goal Improve source.ts --minutes=10 --turns=12 --target=90 --runs=1
+/goal Improve source.ts --file=src/source.ts --symbol=Source --check="pnpm test"
+/goal status
+/goal stop
+/goal off
+/goal clear
+/pi-goal hide
+/pi-goal show
+/pi-goal toggle
+```
+
+`Ctrl+Alt+L` toggles the floating panel. `stop` and `off` are management commands and never become new objectives.
+
+The default bounds are ten active-agent minutes, twelve normal work turns, and one run. Up to five sequential runs are supported, but `runs * turns` cannot exceed twelve.
+
+### How Goal mode works
+
+1. Captures target files, symbols, checks, package scripts, numeric objectives, prior attempts, and available ACE context.
+2. Opens the non-capturing right-side floating panel.
+3. Starts with acceptance discovery when the expected outcome is not yet confirmed.
+4. Exposes `loop_feedback` while the Goal is active.
+5. Treats the first scored attempt as a baseline rather than completion.
+6. Independently verifies artifacts and command evidence before scoring.
+7. Applies correctness, testing, design, Rails safety, operability, review-gate, requirements, and risk caps.
+8. Carries progress trends, blockers, evidence gaps, prior plans, numeric measurements, and next actions into the next prompt.
+9. Detects plateaus, repeated plans, missing feedback, premature completion claims, and unfinished delegated research.
+10. Runs falsification-oriented confirmation passes after a structured completion claim.
+11. Retains Goal ownership and turn accounting through Pi provider retries and overflow recovery.
+12. Stops only when the configured limits are reached, the user stops it, or repeated missing feedback makes safe continuation impossible.
+
+A score is refinement feedback, not an acceptance oracle. Reaching the configured target score does not end the Goal by itself.
+
+Pi 0.80.2 does not expose its `willRetry` decision to extension `agent_end` handlers. pi-loop therefore retains retry-candidate ownership behind a 15-second terminal fallback; the next retry `agent_start` cancels that fallback without consuming another Goal turn.
+
+### Floating panel
+
+The original floating panel remains part of Goal mode. It shows:
+
+- Goal and active state
+- run and turn budgets
+- elapsed and recent turn time
+- context usage
+- latest and best progress
+- ACE state
+- current prompt
+- persisted step history
+
+The panel is right-centered, non-capturing, 25% wide, at least 36 columns, and hidden automatically on narrow terminals.
+
+### Goal feedback and confirmation
+
+`loop_feedback` records focused attempt evidence, acceptance status, criteria, plan tasks, measured metrics, hypothesis, verdict, blockers, and next actions. Heavy implementation or verification work belongs in normal tools; the feedback tool records the checkpoint.
+
+A completion claim requires confirmed acceptance criteria and completed plan tasks. Later turns try to falsify that claim from different angles and can reopen normal iteration when evidence fails.
+
+### ACE integration
+
+ACE context loading and launch events remain supported through the original bridge and bundled proof assets. The external `pi-ace-adapter` package is optional: pi-loop loads compatible project or global ACE storage when available and continues without blocking when the adapter is absent.
+
+## Scheduled Loops
+
+Create recurring, session-scoped tasks with an explicit interval:
+
+```text
+/loop 5m check whether CI passed and summarize any failures
+/loop 2h review new pull-request comments
+/loop 1d summarize commits from the last day
+```
+
+Manage tasks:
+
+```text
 /loop status
-/pi-loop hide
-/pi-loop show
-/pi-loop toggle
-/loop off
+/loop pause <id>
+/loop resume <id>
+/loop run <id>
+/loop cancel <id>
 /loop clear
-
-/ace status
-/ace setup
-/ace import-playbook <path> [name]
-/ace use <name>
-/ace start [playbook] [--mode offline|online|eval_only]
+/loop help
 ```
 
-Shortcut: `Ctrl+Alt+L` toggles the floating panel without changing loop execution.
+`/pi-loop` is an alias for scheduled `/loop` commands. Intervals support minutes, hours, and days. The minimum is one minute and the maximum is six days, so every task can run before its seven-day expiry.
 
-## ACE general-use assets
+Each scheduled task:
 
-The package ships general, domain-neutral ACE assets under `ace/`:
+- belongs to the current Pi session and conversation branch
+- expires seven days after creation
+- fires only while Pi is running
+- runs between agent turns
+- never overlaps another scheduled run
+- retains running ownership through provider retries and task expiry
+- waits while Goal or Plan owns autonomy
+- coalesces missed intervals into one pending run
+- restores and re-arms when the session starts or the conversation branch changes
+- records up to 20 completed, failed, or cancelled runs
+- sends one bounded prompt per run and then stops
 
-| Path | Purpose |
-| --- | --- |
-| `ace/playbooks/pi-loop-general.md` | A reusable software-engineering loop playbook for bug fixes, tests, refactors, docs/config/package work, and ACE integration work. |
-| `ace/datasets/general-loop-proof.jsonl` | ACE-shaped general loop examples with `context`, `question`, `target`, and `metadata.domain = general_engineering`. |
-| `ace/proof/verification.json` | Saved proof metadata for the local verification commands and behaviors proven by the ACE integration work. |
+A late task does not replay every missed interval. It runs once and schedules the next future occurrence.
 
-These assets intentionally avoid single-domain prompts or task-specific evaluation commands. Import the playbook with `/ace import-playbook ace/playbooks/pi-loop-general.md default`, enable it with `/ace use default`, and use `/ace start default` to run the adapter's detached ACE bridge.
+## Planning
 
-Defaults:
-
-| Setting | Default |
-| --- | --- |
-| Timebox | 10 minutes for scored loop work and data collection (capped); spawned agents should report before the cap and partial findings carry into the next attempt. |
-| Turn limit | 12 total attempts |
-| Run count | 1 |
-
-## Paper model mapped to pi-loop
-
-`pi-loop` adapts the ComPilot paper's two-phase loop: context initialization, then iterative optimization with deterministic scoring feedback.
-
-| Paper concept | ComPilot behavior | pi-loop equivalent |
-| --- | --- | --- |
-| Input program | A loop nest extracted from a source program. | A software engineering goal plus the repository state the agent inspects. |
-| Context prompt | Fixed system instructions describing role, input format, output format, action space, hardware, and crash handling. | `systemPromptAddon()` plus `scoringRubricSummary()`: role, limits, scoring contract, hard rules, required evidence, and stop conditions. |
-| Target loop presentation | The selected loop nest is normalized and shown to the LLM. | `/loop` builds a bounded context snapshot: cwd, package manager, package scripts, git branch/status, changed files, and recent scores. The agent still chooses the exact files to inspect. |
-| Initial analysis | The LLM must analyze the loop before proposing transformations. | The kickoff prompt first runs acceptance discovery: the agent decides whether criteria are present, user-confirmed, and sufficient; user-provided bullets help but may still be judged insufficient before planning. |
-| Schedule proposition | The LLM proposes transformations in a structured format. | After the user confirms acceptance criteria, the agent states and executes a trackable plan in normal conversation/tool use; `loop_feedback` records acceptance status, criteria/candidates, and task statuses so the next prompt can continue from the right phase. |
-| Response parser | Extracts the schedule from the LLM response. | TypeBox validates a focused `loop_feedback` schema while scoring derives artifacts/checks from the target context and Pi tool history. |
-| Validity and legality checks | Lightweight syntax checks plus compiler legality checks. | Strict schema validation, independent evidence verification, and scoring hard caps flag or cap weak evidence and unresolved risks; pi-loop still does not formally prove arbitrary code safety. |
-| Compiler/runtime feedback | Reports invalid, illegal, solver failure, crash, or successful speedup/slowdown. | Reports typed outcome plus progress/evidence feedback: baseline recorded, new-best progress, verifier findings, blockers, strengths, and next actions. |
-| Optimization history | Feedback is appended to the dialogue so the next iteration can adapt. | Progress entries are appended to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`; continuation prompts are rebuilt as refined prompts with what was tried, what did not improve, plateau/repeat signals, best attempt to beat, blockers, next actions, budget, and compact ACE playbook context from `pi-ace-adapter` when enabled. |
-| Stopping condition | Stop command or iteration limit; the framework can push past premature LLM stop attempts. | A 10-minute capped timebox for active loop work and data collection, 12-attempt global turn budget, run limit, user stop, or repeated missing feedback calls. Positive heuristic progress alone never stops the loop. |
-
-## Runtime context steps
-
-1. `/loop <goal>` parses command input into a loop config: goal, max turns, max runs, and max minutes.
-2. pi-loop builds a bounded context snapshot from the current working directory, package scripts, git state, changed files, and prior feedback attempts.
-3. The kickoff instructions first run acceptance discovery: the agent decides whether user-provided or discovered criteria are sufficient for a plan, asks contextual questions when they are not, or uses bounded research/delegation to bring back candidate options for the user to select.
-4. The config plus context snapshot and current Pi session id are appended to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` as a `config` entry.
-5. `loop_feedback` is activated for the session.
-6. pi-loop requests a daemon-ish ACE run through `pi-ace-adapter` when ACE storage is enabled and the selected playbook exists. The loop does not wait for ACE completion; output and metadata paths are logged.
-7. A kickoff prompt is sent as a normal user message. It includes the context snapshot, compact ACE context when enabled, acceptance-discovery guidance, bounded research/delegation guidance, and instructions to record acceptance status, candidate or confirmed criteria, and plan-task state for the next refined prompt.
-8. On every `before_agent_start`, pi-loop injects a system prompt add-on containing the active goal, context snapshot, limits, scoring hard rules for the work itself, bounded delegation rules, and — once recorded — the confirmed acceptance criteria and current plan-task statuses. Because this add-on is rebuilt from persisted state on every turn, the loop's contract survives session compaction: nothing the loop needs lives only in old conversation turns.
-9. On `agent_start`, pi-loop increments the turn counter, appends a `turn_started` event, and records how many score entries existed before the turn.
-10. The agent works with normal Pi tooling. pi-loop does not sandbox tools or prescribe the implementation path, and spawned-agent data collection remains part of the same loop cap.
-11. Before claiming completion, the agent must call `loop_feedback` with only a concise `summary`, `status`, `notes`, `acceptanceStatus`, compact `acceptanceCriteria`, compact `planTasks`, and optional short `nextActions`.
-12. The feedback tool freezes the loop timer, infers evidence from the target context and current Pi tool history, classifies the outcome, appends a progress entry to `~/.pi/agent/pi-loop/projects/<project>/log.jsonl`, updates the widget, and returns progress feedback. The first call records only the baseline.
-13. On `agent_end`, pi-loop checks whether the turn produced feedback:
-    - if not, it schedules a missing-feedback prompt
-    - it schedules a refined continuation prompt using tried actions, non-improvements, plateau/repeat analysis, blockers, next actions, remaining budget, and compact ACE context when enabled
-    - if a safety limit is hit, it appends a stop event, sends a concise TL;DR summary with each loop step taken, disables the feedback tool, and clears the widget
-14. On the next event in the same Pi session, pi-loop reconstructs active state from `~/.pi/agent/pi-loop/projects/<project>/log.jsonl` and resumes the widget/tool state when limits have not been reached. A different Pi session ignores that active loop and must start its own `/loop`.
-
-## Input structure
-
-There are two inputs: the command input and the lightweight feedback input.
-
-### `/loop` command input
+Start read-only exploration with:
 
 ```text
-/loop <goal> [--minutes=10] [--turns=12] [--runs=1]
-/loop <goal> [--file=path] [--symbol=Name] [--check="pnpm test tests/foo.test.mjs"]
+/plan <request>
+/plan status
+/plan clear
 ```
 
-Parsed config:
+Plan mode activates an explicit read-only tool allowlist and removes Bash, edit, write, Goal feedback, and unknown custom tools. The agent calls `save_plan` with a self-contained living plan containing:
 
-```ts
-{
-  goal: string;
-  maxMinutes: number;
-  maxTurns: number;
-  maxRuns: number;
-  startedAt: number;
-  sessionId: string;
-  targetContext: TargetContextSnapshot;
-}
-```
+- context and orientation
+- constraints and boundaries
+- acceptance criteria
+- independently verifiable milestones
+- steps and verification commands per milestone
+- risks and decisions
 
-`--turns` is per run when `--runs > 1`, but it is capped at 12 and `runs * turns` must stay within the 12-attempt global safety cap. `--minutes` remains a global timebox across scored loop work and data collection and is capped at 10 minutes. Spawned agents should report before that cap; partial research should be scored honestly and moved to the next attempt instead of stretching the turn. `--runs` is capped at 5.
+When the plan is ready, choose:
 
-### `loop_feedback` tool input
+- Turn plan into a Goal
+- Execute once
+- Refine plan
+- Keep plan
 
-The feedback input is intentionally focused. The model should not restate artifacts, test matrices, design evidence, Rails safety, audit output, or review-gate details here. It should record only the checkpoint plus the acceptance-discovery state and trackable plan state needed to build the next prompt. Detailed signals still come from normal work performed during the turn: target context, file/tool history, bash check results, and final refinement.
+Turning a Plan into a Goal starts the intelligent engine with the Plan outcome, verification, constraints, boundaries, acceptance criteria, milestones, iteration policy, and blocked stop condition embedded in the objective.
 
-```ts
-{
-  summary?: string;
-  status?: "continue" | "blocked" | "ready_for_review";
-  notes?: string;
-  acceptanceStatus?: "missing" | "discovering" | "proposed" | "confirmed";
-  acceptanceCriteria?: string[];
-  planTasks?: Array<{
-    id?: string;
-    title: string;
-    status: "pending" | "in_progress" | "completed" | "blocked";
-    evidence?: string;
-  }>;
-  metrics?: Array<{ name: string; value: number; unit?: string; sourceCommand?: string }>;
-  hypothesis?: string;
-  verdict?: "keep" | "discard";
-  nextActions?: string[];
-}
-```
+## Rich-prompt advisor
 
-Field meanings:
+For an interactive, multi-part prompt without an explicit mode instruction, pi-loop may offer to draft a Goal contract, Plan first, continue normally, or stop asking for the session.
 
-| Field | Purpose |
-| --- | --- |
-| `summary` | Concise human checkpoint for the turn. |
-| `status` | Whether the turn should continue, is blocked, or is ready for final review/refinement. |
-| `notes` | Optional blocker, handoff, or next-step note. |
-| `acceptanceStatus` | Whether criteria are missing, being discovered, proposed for user selection, or confirmed by the user. |
-| `acceptanceCriteria` | Candidate or confirmed observable criteria. Proposed criteria are not final until the user confirms/selects them. |
-| `planTasks` | Task plan with statuses used to choose the next verifiable slice after criteria are confirmed. |
-| `metrics` | Measured values for the loop's numeric objectives, produced by real commands run this turn. Use the objective id (`O1`, `O2`, ...) as the metric name when one matches; names matching an objective are canonicalized to its id and compatible units are converted to the objective's unit so the metric history stays one series. A metric is verified only when its value appears in tool output observed this turn; `sourceCommand` is recorded as provenance. Unverified metrics are labeled and excluded from baselines and trends. |
-| `hypothesis` | One-line statement of what this turn's attempt tested. Persisted per turn and echoed in continuation prompts so experiments stay comparable. |
-| `verdict` | Whether the attempt should survive: `keep` or `discard`. |
-| `nextActions` | Optional short actions for the next refined prompt. |
+The advisor uses deterministic prompt-shape signals. It skips extension messages, steering and queued follow-ups, slash commands, shell input, explicit Goal/Plan/Loop or scheduling requests, short prompts, no-UI sessions, and sessions where a work mode is already active.
 
-The internal scorer still applies hard caps, but it builds the scoring input internally from existing context and tool history instead of asking the model to generate a huge schema every turn.
+## Tools
 
-### Numeric objectives from goal text
+- `create_goal`: starts the intelligent Goal engine only when Goal mode was explicitly requested
+- `get_goal`: returns a non-circular Goal and progress summary
+- `loop_feedback`: records score-guided evidence and attempt feedback while Goal mode is active
+- `get_plan`: reads the saved structured Plan
+- `save_plan`: saves the result of read-only Plan exploration
 
-`/loop` parses measurable numbers out of the goal text into structured objectives stored on the target context snapshot. Supported phrasings include percent changes ("reduce bundle size by 20%"), max thresholds ("keep p95 under 200ms"), min thresholds ("coverage at least 90%"), and explicit baselines ("cut test runtime from 40s to 25s").
+## Persistence
 
-Each objective gets a stable id (`O1`, `O2`, ...), a metric label, a direction, a target value, and a unit. The kickoff and continuation prompts instruct the agent to measure a real baseline for every objective with a command in the first work turn and to report the current value through `loop_feedback.metrics` each turn. The feedback response then shows measured deltas against the baseline and whether each objective's target is met, the continuation prompt carries a measured metric trend, and every measured value is persisted on the score entries in `log.jsonl` so metric history survives session restores. Objectives that never received a measured baseline are called out explicitly in later prompts.
-
-Reported metrics are not blindly trusted: a metric counts as verified only when its value appears in the bash/tool output pi-loop observed during the turn; the optional `sourceCommand` is recorded as provenance but cannot verify a value by itself. Unverified metrics are still recorded, but they are labeled `[unverified — no matching command output observed this turn]` in the feedback response and excluded from baselines, metric trends, and the reported-objective check, so a fabricated number cannot become the baseline and later prompts keep asking for a real measurement. Values reported in a unit compatible with the objective's unit (time or size families) are converted to the objective unit before comparison; incompatible units are reported as `not comparable` instead of producing a false target status.
-
-Once a metric has three or more verified measurements, the trend line adds a MAD-based confidence score — how the best improvement compares to the series' noise floor. Below 1x noise the prompt advises re-measuring before trusting the gain; 1–2x is marked marginal.
-
-Example:
+Intelligent Goal history uses the original project-keyed JSONL log under:
 
 ```text
-Measured metrics:
-- O1 bundle size: 480kb (-7.7% vs baseline 520kb) — O1 target keep at or under 500kb: met
+~/.pi/agent/pi-loop/projects/<project-key>/log.jsonl
 ```
 
-## Output structure
+Entries retain the original config, score, event, session, run, turn, evidence, and step-history contracts. Scheduled task state uses Pi custom session entries with `customType: "pi-loop-schedule"`. Plan state uses `customType: "pi-plan"`.
 
-### Tool response
+There is no background daemon. Scheduled work that must run while Pi or the computer is closed requires an external scheduler or durable automation service.
 
-`loop_feedback` returns human-readable text plus structured details.
+## Migration
 
-Text response shape:
+Older pi-loop releases used `/loop <goal>`. Goal text without an interval is no longer silently interpreted as a schedule:
 
 ```text
-Progress: <baseline recorded|+N.N% over baseline> (<baseline recorded; continue|new best recorded; continue|continue>)
-Outcome: <typed outcome>
-Blockers:
-- <severity>: <message>
-Verifier findings:
-- <severity>: <message>
-Next actions:
-- <action>
+/loop Improve the test suite until coverage reaches 90%
 ```
 
-Structured details keep internal measurement fields for persistence and automated checks; the UI and text response do not render those fields. `passedDefinition` is retained as a compatibility field for new-best feedback and is not a loop stop command.
-
-```ts
-{
-  result: {
-    score: number;
-    rawScore: number;
-    targetScore: number;
-    baselineScore: number | null;
-    progressPercent: number | null;
-    passedDefinition: boolean;
-    improvement: number | null;
-    categories: Array<{ key: string; label: string; score: number; max: number; evidence: string[]; gaps: string[] }>;
-    blockers: Array<{ severity: "blocker" | "important" | "minor"; message: string; evidence?: string }>;
-    strengths: string[];
-    nextActions: string[];
-    outcome: "invalid_evidence" | "verification_failed" | "review_gate_failed" | "safety_blocked" | "tool_or_runtime_failure" | "successful_improvement" | "successful_no_improvement" | "needs_iteration";
-    verifierFindings: Array<{ code: string; severity: "blocker" | "important" | "minor"; message: string; evidence?: string; cap: number }>;
-  };
-  loopState: {
-    active: boolean;
-    goal: string | null;
-    targetScore: number;
-    maxTurns: number;
-    maxMinutes: number;
-    startedAt: number | null;
-    turnsStarted: number;
-    results: unknown[];
-    stopReason: string | null;
-  };
-}
-```
-
-### Persistent log output
-
-`~/.pi/agent/pi-loop/projects/<project>/log.jsonl` stores three entry kinds:
-
-```ts
-{ type: "config"; schemaVersion?: 2; goal: string; targetScore: number; maxTurns: number; maxMinutes: number; maxRuns?: number; startedAt: number; sessionId?: string; targetContext?: TargetContextSnapshot }
-{ type: "score"; schemaVersion?: 2; run?: number; turn: number; globalTurn?: number; timestamp: number; summary: string; score: number; rawScore: number; targetScore: number; baselineScore?: number | null; progressPercent?: number | null; passedDefinition: boolean; improvement: number | null; blockers: unknown[]; strengths?: string[]; nextActions: string[]; categories: unknown[]; outcome?: string; verifierFindings?: unknown[]; attempt?: unknown; result?: unknown }
-{ type: "event"; schemaVersion?: 2; timestamp: number; event: "stopped" | "run_started" | "run_stopped" | "turn_started" | "missing_score" | "premature_stop" | "ace_run_started" | "ace_run_completed" | "ace_run_failed" | "ace_run_skipped"; reason?: string; run?: number; turn?: number; globalTurn?: number; details?: Record<string, unknown> }
-```
-
-### UI output
-
-The floating right-side panel renders at 25% terminal width and 95% terminal height. It shows runtime data, a current prompt section containing the original user loop request with `/loop` removed, recent turn durations that wrap across lines instead of truncating, and the full runtime step history so the README model is visible while the loop runs. It never shows the generated kickoff/continuation prompt boilerplate in the current prompt panel. Toggle the panel with `Ctrl+Alt+L`, `/pi-loop hide`, `/pi-loop show`, or `/pi-loop toggle`:
+returns guidance to use:
 
 ```text
-╭──────────── pi-loop <status> ────────────╮
-│──────────── data ────────────            │
-│turn: <total>/<limit> total, run <n>/<max> │
-│time: <elapsed>/<limit>m all, current <n> │
-│last turn: <duration|none>                │
-│tokens: <used>/<window> <percent>         │
-│progress: <baseline|+N.N% over baseline>  │
-│best: <+N.N% over baseline run n|none>    │
-│ace: <not launched|running pid n|skipped> │
-│recent: #1 9m 12s, #2 8m 03s             │
-│        #3 10m 00s, #4 2m 17s            │
-│──────── current prompt ────────          │
-│Now: <original loop request, without      │
-│     /loop>                               │
-│──────── step history ────────            │
-│  07 done  start turn - turn <n>/<max>    │
-│> 08 now   agent work - work in progress  │
-│. 09 next  measure progress - waiting...  │
-│. 10 next  feedback - waiting...          │
-╰──────────────────────────────────────────╯
+/goal Improve the test suite until coverage reaches 90%
 ```
 
-The runtime step table is the live version of the core loop orchestration steps: `/loop status` prints all 12 steps, and the panel shows all 12 steps in its expanded layout. ACE launch status is shown separately in the `ace` data row and in `ace_run_*` log events because ACE runs daemon-style outside the LLM turn lifecycle. `done` is only for completed past steps; future steps render as `next`/waiting until the active step advances. The floating panel carries loop progress while Pi's footer remains reserved for Pi status. When the loop finishes, pi-loop clears the widget and sends a concise TL;DR message covering what was accomplished plus the steps taken in each loop turn.
+The intelligent engine, floating panel, scoring, confirmation, history, and bounded iteration behavior are preserved under `/goal`.
 
-### Sequential best-of-K runs
-
-`--runs=K` starts bounded sequential attempts in the same Pi session. This is not a statistically independent restart like the paper's fresh best-of-K runs, but it gives pi-loop a safe best-of-K analogue without spawning agents, forking sessions, or running parallel edits.
-
-Behavior:
-
-1. Run 1 starts with the normalized target context.
-2. If a run reaches its turn limit, pi-loop appends `run_stopped`, starts the next run, and asks for a genuinely different plan — unless the previous run ended in a claimed completion, in which case the next run becomes an independent confirmation audit of that claim.
-3. Scoring improvements are retained as best-so-far feedback but do not stop remaining runs.
-4. If all runs exhaust, the stop reason reports the best progress and run.
-5. `/loop off` stops all runs.
-
-### Confirmation passes after a completion claim
-
-A completion claim is not the end of the loop; it changes what the remaining budget is spent on. When a `loop_feedback` checkpoint has `status: "ready_for_review"` with confirmed acceptance criteria and every plan task completed, the next continuation prompt becomes a confirmation pass instead of an exploration prompt: re-verify each acceptance criterion with fresh evidence produced that turn, exercise the result end-to-end the way the user would, and actively try to falsify the claim — with no new features or scope allowed. Each surviving pass increments the pass counter and asks for a different falsification angle (cleaner environment, different user path, the criterion most likely to hide a gap). If any criterion fails, the agent reopens the relevant plan tasks and the loop returns to normal iteration automatically. With `--runs > 1`, a run that ends in a claimed completion turns the next run into an independent confirmation audit instead of a "genuinely different plan" attempt.
-
-### Premature-stop handling
-
-If a turn ends without `loop_feedback`, pi-loop appends a `missing_score` event (legacy internal event name) and asks the agent to record lightweight feedback before doing more work. If the agent appears to claim completion before a configured stop point, pi-loop appends `premature_stop` and treats the completion claim as rejected, even if the latest score is a new best.
-
-## Initial example
-
-Start Pi in a repository, then run:
+## Architecture
 
 ```text
-/loop Improve the CartCalculator discount tests so they prove behavior without mocking owned code --minutes=10 --turns=8
+extensions/pi-loop/index.ts                     unified lifecycle and work arbitration
+extensions/pi-loop/intelligent-goal.ts          intelligent Goal registration and model tools
+extensions/pi-loop/loop-command.ts               Goal command and floating-panel controls
+extensions/pi-loop/controller.ts                 Goal continuation, limits, and completion summary
+extensions/pi-loop/events.ts                     Goal lifecycle and refined continuation
+extensions/pi-loop/score-tool.ts                 Goal feedback and evidence collection
+extensions/pi-loop/scoring/                      scoring categories, verification, and hard caps
+extensions/pi-loop/prompt.ts                     acceptance, refinement, and confirmation prompts
+extensions/pi-loop/state.ts                      Goal runs, attempts, timing, and progress state
+extensions/pi-loop/floating-panel.ts             generic overlay implementation
+extensions/pi-loop/ui.ts                         intelligent Goal panel rendering
+extensions/pi-loop/schedule-*.ts                 scheduled task parsing and state
+extensions/pi-loop/scheduler.ts                  timers, persistence, and coalescing
+extensions/pi-loop/plan/                         Plan state, safety, advisor, and runtime
 ```
-
-Expected first turn:
-
-1. The agent runs acceptance discovery: decide whether the user already confirmed criteria for the loop.
-2. If the criteria are obvious from the user's prompt, it proposes them for confirmation; if the goal is vague, it asks contextual questions or researches candidate options first.
-3. After the user confirms criteria, it can record criteria such as:
-   - discounts are applied for eligible carts
-   - ineligible carts keep the original total
-   - owned code is not mocked
-   - the changed behavior is covered by observable assertions
-4. It builds a trackable plan from the confirmed criteria.
-5. It edits or adds tests.
-6. It runs verification, for example:
-
-```bash
-pnpm test tests/cart-calculator.test.mjs
-pnpm typecheck
-```
-
-7. It calls `loop_feedback` with a focused checkpoint like this:
-
-```json
-{
-  "summary": "Added behavior tests for eligible and ineligible cart discounts without mocking owned code.",
-  "status": "ready_for_review",
-  "notes": "targeted tests and typecheck passed; carry any remaining review-gate hardening into final refinement",
-  "acceptanceStatus": "confirmed",
-  "acceptanceCriteria": [
-    "discounts are applied for eligible carts",
-    "ineligible carts keep the original total",
-    "owned code is not mocked",
-    "the changed behavior is covered by observable assertions"
-  ],
-  "planTasks": [
-    { "id": "T1", "title": "Map discount behavior and current tests", "status": "completed", "evidence": "CartCalculator tests inspected" },
-    { "id": "T2", "title": "Add observable discount tests", "status": "completed", "evidence": "focused test passed" },
-    { "id": "T3", "title": "Run remaining review gates", "status": "pending" }
-  ],
-  "nextActions": ["run the remaining configured checks if the loop continues"]
-}
-```
-
-The detailed evidence stays in the transcript and tool history: file edits, check commands, outputs, spawned-agent reports, and final refinement notes. `loop_feedback` freezes the loop timer and lets pi-loop score that existing context without making the model emit a large evidence payload.
-
-Possible first response:
-
-```text
-Progress: baseline recorded (baseline recorded; continue)
-Outcome: needs_iteration
-Blockers:
-- important: Non-trivial executable change has no automated review gate evidence.
-Next actions:
-- Baseline recorded; run another loop turn and use feedback to explore a better attempt.
-- Automated review gates: No security or dependency review gate evidence was provided.
-```
-
-The next turn starts from that feedback. The agent might run full CI-equivalent checks, add missing edge coverage, or resolve a blocker. The extension does not stop on heuristic satisfaction; it keeps exploring until the configured limits or a user stop.
-
-## Internal measurement model
-
-The evidence contract is exposed through `extensions/pi-loop/scoring-heuristics.ts`. Agents and external checker integrations should import that facade as the source of truth. The implementation is split by responsibility under `extensions/pi-loop/scoring/`.
-
-Hard-cap rule files live under `extensions/pi-loop/scoring/rules/`. A custom integration can create a `RuleRegistry`, call `.load(customRule)`, and pass that registry to `scoreLoopResult(input, registry)`.
-
-```ts
-import { RuleRegistry, scoreLoopResult } from "./extensions/pi-loop/scoring-heuristics.ts";
-
-const registry = new RuleRegistry()
-  .load(myTeamRule)
-  .load(mySecurityRule);
-
-const result = scoreLoopResult(input, registry);
-```
-
-Default built-in rule families:
-
-```text
-requirements
-attempt
-verification
-test-quality
-review-gates
-rails-safety
-design-solid
-operability
-risks
-contradictions
-```
-
-Internal category weights:
-
-| Category | Points |
-| --- | ---: |
-| Correctness | 20 |
-| Testing quality | 20 |
-| Design and SOLID | 18 |
-| Rails engineering | 15 |
-| Verification and gates | 12 |
-| Automated review gates | 10 |
-| Operational hardening | 5 |
-
-Scoring is domain-aware: when the target context shows no software project (no package manager, scripts, code files, or checks) and no code artifacts are touched, the code-centric rule families (review gates, test quality, verification commands, Rails safety) stay silent instead of raising irrelevant blockers on non-code goals. The moment real code artifacts appear, those caps apply regardless of the domain hint, so the relaxation cannot be used to dodge them.
-
-Hard caps lower the internal measurement when requirements are missing, inferred artifacts are absent or unverifiable, verification is missing, review gates are missing or failed, tests are mock-only, owned code is mocked, tests are implementation-coupled, mock status is unstated, Rails evidence contradicts touched paths, critical security/auth/data risks remain unresolved, or loop behavior is unbounded. The user-facing loop progress is still only percent improvement over the first feedback attempt.
-
-## Runtime diagram
-
-```text
-PHASE 1: CONTEXT INITIALIZATION
-
-User
-  |
-  | /loop <goal> --minutes=N --turns=N --runs=N
-  v
-+-----------------------+
-| /loop command parser  |
-| parseLoopArgs()       |
-+-----------------------+
-  |
-  | parsed goal + limits
-  v
-+-----------------------------+
-| Context initializer         |
-| buildTargetContextSnapshot()|
-| files, symbols, checks, git |
-+-----------------------------+
-  |
-  | context snapshot
-  v
-+-----------------------+
-| Runtime state         |
-| startLoopState()      |
-+-----------------------+
-  |
-  +----------------------------+
-  |                            |
-  | config + context entry     | active feedback tool
-  v                            v
-+-----------------------+    +--------------------------+
-| ~/.pi/agent/pi-loop/... |  | loop_feedback tool       |
-| append config         |    | enabled for this session |
-+-----------------------+    +--------------------------+
-  |
-  | kickoffPrompt(state)
-  v
-+--------------------------------------------------+
-| Agent receives context                           |
-| - goal                                           |
-| - time/turn/run budget                           |
-| - context snapshot                               |
-| - evidence contract                              |
-| - hard rules                                     |
-| - instruction to analyze before implementation   |
-+--------------------------------------------------+
-
-
-PHASE 2: ITERATIVE OPTIMIZATION LOOP
-
-+--------------------------------------------------+
-| before_agent_start                               |
-| inject systemPromptAddon(state)                  |
-+--------------------------------------------------+
-  |
-  v
-+--------------------------------------------------+
-| Agent turn                                       |
-| - inspect files                                  |
-| - map acceptance criteria                        |
-| - state/update trackable plan tasks              |
-| - edit / investigate                             |
-| - run real checks                                |
-| - leave evidence in tool history                 |
-+--------------------------------------------------+
-  |
-  | focused checkpoint + acceptanceStatus/criteria/tasks
-  v
-+--------------------------------------------------+
-| loop_feedback                                    |
-| TypeBox validates focused input schema           |
-| freezes loop timer for post-processing           |
-+--------------------------------------------------+
-  |
-  v
-+--------------------------------------------------+
-| build internal score input + scoreLoopResult()   |
-| - infer artifacts/checks from context/history    |
-| - independent evidence verifier                  |
-| - internal category measurements                 |
-| - plug/play rule files                           |
-| - hard caps                                      |
-| - blockers                                      |
-| - typed outcome                                  |
-| - verifier findings                             |
-| - next actions                                  |
-| - progress vs first feedback baseline            |
-+--------------------------------------------------+
-  |
-  +----------------------------+-------------------+
-  |                            |
-  | progress entry             | visible feedback
-  v                            v
-+-----------------------+    +--------------------------+
-| ~/.pi/agent/pi-loop/... |  | Floating side panel     |
-| append progress/outcome|   | data / prompt / history |
-+-----------------------+    +--------------------------+
-  |
-  v
-+--------------------------------------------------+
-| Stop check                                       |
-| - timebox reached                                |
-| - current run turn limit reached                 |
-| - all runs exhausted                             |
-| - user ran /loop off                             |
-| - repeated missing feedback calls                |
-+--------------------------------------------------+
-  |
-  +-------------+----------------------+----------------+
-  | finish      | next run available   | continue same run
-  v             v                      v
-+-------------+ +--------------------+ +------------------------------+
-| finishLoop  | | run_stopped event  | | continuePrompt(state)        |
-| stop event  | | run_started event  | | compact feedback history     |
-+-------------+ | nextRunPrompt      | | blockers + next actions      |
-                +--------------------+ +------------------------------+
-                         |                         |
-                         v                         v
-                    next agent turn           next agent turn
-
-
-PLUG/PLAY RULE LOADER
-
-scoreLoopResult(input, registry?)
-  |
-  v
-+--------------------------+
-| RuleRegistry             |
-| .load(rule)              |
-| .evaluate(input)         |
-+--------------------------+
-  |
-  +--> requirements.ts
-  +--> attempt.ts
-  +--> verification.ts
-  +--> test-quality.ts
-  +--> review-gates.ts
-  +--> rails-safety.ts
-  +--> design-solid.ts
-  +--> operability.ts
-  +--> risks.ts
-  +--> contradictions.ts
-  |
-  v
-hard caps + blocker reasons
-
-
-SESSION RESTORE
-
-Pi session_start
-  |
-  v
-+--------------------------+
-| reconstructLoopState()   |
-| read ~/.pi/agent/pi-loop |
-| replay config + scores   |
-+--------------------------+
-  |
-  +--> if active and limits not reached: restore widget + feedback tool
-  +--> otherwise: stay stopped
-```
-
-## Repository layout
-
-```text
-extensions/pi-loop/index.ts                  extension entrypoint
-extensions/pi-loop/target-context.ts         normalized target context snapshot
-extensions/pi-loop/objectives.ts             numeric objective extraction from goal text
-extensions/pi-loop/metric-feedback.ts        measured-metric feedback and trend lines
-extensions/pi-loop/feedback-history.ts       compact score-history feedback
-extensions/pi-loop/premature-stop.ts         completion-claim detection
-extensions/pi-loop/run-manager.ts            sequential best-of-K run helpers
-extensions/pi-loop/controller.ts             loop lifecycle orchestration
-extensions/pi-loop/events.ts                 Pi lifecycle event handlers
-extensions/pi-loop/loop-command.ts           /loop command registration
-extensions/pi-loop/score-tool.ts             loop_feedback registration and internal score-input builder
-extensions/pi-loop/tool-schema.ts            lightweight feedback tool input schema
-extensions/pi-loop/state.ts                  runtime state transitions
-extensions/pi-loop/log.ts                    ~/.pi/agent/pi-loop/projects persistence
-extensions/pi-loop/ui.ts                     floating right-side progress panel
-extensions/pi-loop/scoring-heuristics.ts     public scoring facade
-extensions/pi-loop/scoring/evidence-verifier.ts independent evidence checks
-extensions/pi-loop/scoring/outcome.ts        typed paper-style feedback outcomes
-extensions/pi-loop/scoring/rules/            plug/play hard-cap rule files
-tests/                                       behavior and scoring tests
-```
-
-Source and test modules are kept under roughly 200 lines to avoid god files.
 
 ## Development
 
 ```bash
-pnpm install
 pnpm check
 pnpm smoke
+pnpm pack:dry
 ```
 
-Individual commands:
+## Design sources
 
-```bash
-pnpm test
-pnpm typecheck
-pi --mode json --no-session --no-extensions -e ./extensions/pi-loop/index.ts -p '/loop status'
-```
+- [Codex: Follow a goal](https://developers.openai.com/codex/use-cases/follow-goals)
+- [Codex: Using PLANS.md for multi-hour problem solving](https://developers.openai.com/cookbook/articles/codex_exec_plans)
+- [Codex automations](https://developers.openai.com/codex/app/automations)
+- [Claude Code goals](https://code.claude.com/docs/en/goal)
+- [Claude Code best practices](https://code.claude.com/docs/en/best-practices)
+- [Claude Code scheduled tasks](https://code.claude.com/docs/en/scheduled-tasks)
 
-## Runtime files
+## License
 
-`pi-loop` writes runtime state only under Pi's global agent directory:
-
-```text
-~/.pi/agent/pi-loop/projects/<project>/log.jsonl
-```
-
-Delete the global log manually or run `/loop clear` to remove loop state.
+MIT

@@ -2,6 +2,7 @@ import { createLoopState, type LoopRuntimeState } from "./state.ts";
 
 export interface RuntimeStore {
   ensure(sessionKey: string): LoopRuntimeState;
+  hasActive(): boolean;
   clear(sessionKey: string): void;
 }
 
@@ -15,6 +16,9 @@ export function createRuntimeStore(): RuntimeStore {
         states.set(sessionKey, state);
       }
       return state;
+    },
+    hasActive(): boolean {
+      return [...states.values()].some((state) => state.active);
     },
     clear(sessionKey: string): void {
       const state = states.get(sessionKey);

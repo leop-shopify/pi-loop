@@ -45,7 +45,7 @@ test("ACE loop context fails closed when disabled or malformed", async () => {
   });
 });
 
-test("/loop kickoff includes ACE context, registers /ace commands, and requests ACE launch", async () => {
+test("/goal kickoff includes ACE context and requests an optional ACE launch", async () => {
   await withEnv("PI_ACE_ADAPTER_DAEMON_DRY_RUN", "1", async () => {
     await withTempDir(async (dir) => {
       writeProject(dir);
@@ -55,11 +55,11 @@ test("/loop kickoff includes ACE context, registers /ace commands, and requests 
       const ctx = mockContext(dir, pi);
       piLoopExtension(pi);
 
-      await pi.commands.get("loop").handler("Improve source.ts --minutes=90", ctx);
+      await pi.commands.get("goal").handler("Improve source.ts --minutes=90", ctx);
 
       assert.match(pi.sentMessages[0].text, /## ACE Playbook Context/);
       assert.match(pi.sentMessages[0].text, /smallest testable behavior slice/);
-      assert.match(pi.notifications[0].message, /pi-loop started: 10 minutes, 12 turns per run/);
+      assert.match(pi.notifications[0].message, /pi-goal started: 10 minutes, 12 turns per run/);
       assert.deepEqual(pi.stepMessages.slice(0, 4).map((message) => message.content), [
         "Step: starting loop — run 1/1, 12 attempts max",
         "Step: launching ACE — mode offline",
@@ -74,38 +74,16 @@ test("/loop kickoff includes ACE context, registers /ace commands, and requests 
   });
 });
 
-test("bundled adapter dist registers /ace command and daemon listener", async () => {
-  const { default: registerAdapter } = await import("../node_modules/pi-ace-adapter/dist/index.js");
-  const commands = new Map();
-  const listeners = [];
-  const pi = {
-    registerCommand(name, command) { commands.set(name, command); },
-    on(channel, handler) {
-      listeners.push({ channel, handler });
-      return () => {};
-    },
-    events: {
-      on(channel, handler) {
-        listeners.push({ channel, handler });
-        return () => {};
-      },
-    },
-  };
-
-  registerAdapter(pi);
-
-  assert.ok(commands.has("ace"));
-  assert.match(commands.get("ace").description, /status\|setup\|import-playbook\|use\|off\|feedback\|start\|train\|export-playbook/);
-  assert.ok(listeners.some((listener) => listener.channel === "pi-ace-adapter:launch-daemon"));
+test("ACE adapter integration remains optional instead of blocking pi-loop installation", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(manifest.dependencies?.["pi-ace-adapter"], undefined);
+  assert.equal(manifest.pi.extensions.includes("./node_modules/pi-ace-adapter/dist/index.js"), false);
 });
 
-test("package manifest loads pi-ace-adapter resources and ships ACE proof assets", () => {
+test("package manifest ships the ACE bridge assets with the unified extension", () => {
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
-  assert.ok(manifest.pi.extensions.includes("./node_modules/pi-ace-adapter/dist/index.js"));
   assert.ok(manifest.pi.extensions.includes("./extensions/pi-loop/index.ts"));
-  assert.ok(manifest.pi.skills.includes("./node_modules/pi-ace-adapter/skills"));
-  assert.ok(manifest.pi.prompts.includes("./node_modules/pi-ace-adapter/prompts"));
   assert.ok(manifest.files.includes("ace"));
 });
 
@@ -118,6 +96,9 @@ test("general ACE playbook and proof dataset are domain-neutral", () => {
 
   assert.doesNotMatch(playbook, forbiddenDomain);
   assert.doesNotMatch(dataset, forbiddenDomain);
+  assert.match(playbook, /external adapter as optional/);
+  assert.match(playbook, /compact checkpoint/);
+  assert.doesNotMatch(playbook, /score_loop_result/);
   assert.equal(proof.domain, "general_engineering");
   assert.equal(proof.singleDomainBenchmarkSpecific, false);
 
@@ -125,6 +106,8 @@ test("general ACE playbook and proof dataset are domain-neutral", () => {
   assert.equal(rows.length >= 5, true);
   assert.equal(rows.every((row) => row.metadata?.domain === "general_engineering"), true);
   assert.equal(rows.every((row) => row.context && row.question && row.target), true);
+  assert.match(rows.find((row) => row.metadata.scenario === "packaging").target, /without requiring an unavailable adapter/);
+  assert.match(rows.find((row) => row.metadata.scenario === "test_quality").target, /normal tool results/);
 });
 
 test("spawn-only turns wait for agent reports instead of forcing a missing-score prompt", async () => {

@@ -9,23 +9,24 @@ if (!piBin) {
   process.exit(1);
 }
 
-const result = spawnSync(piBin, [
-  "--mode",
-  "json",
-  "--no-session",
-  "--no-extensions",
-  "-e",
-  "./extensions/pi-loop/index.ts",
-  "-p",
-  "/loop status",
-], { stdio: "inherit" });
+for (const prompt of ["/loop status", "/goal status", "/plan status"]) {
+  const result = spawnSync(piBin, [
+    "--mode",
+    "json",
+    "--no-session",
+    "--no-extensions",
+    "-e",
+    "./extensions/pi-loop/index.ts",
+    "-p",
+    prompt,
+  ], { stdio: "inherit" });
 
-if (result.error) {
-  console.error(result.error.message);
-  process.exit(1);
+  if (result.error) {
+    console.error(result.error.message);
+    process.exit(1);
+  }
+  if (result.status !== 0) process.exit(result.status ?? 1);
 }
-
-process.exit(result.status ?? 1);
 
 function findPiBinary() {
   const paths = (process.env.PATH ?? "").split(delimiter);

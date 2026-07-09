@@ -32,18 +32,20 @@ export function parseLoopArgs(args: string): ParsedLoopArgs {
   return { command: parsed.goalTokens.length > 0 ? "start" : "help", goal: parsed.goalTokens.join(" "), minutes: parsed.minutes, turns: parsed.turns, target: parsed.target, runs: parsed.runs, files: parsed.files, symbols: parsed.symbols, checks: parsed.checks };
 }
 
-export function loopHelp(): string {
+export function goalHelp(): string {
   return [
-    "Usage: /loop <goal> [--minutes=10] [--turns=12] [--target=90] [--runs=1]",
-    "       /loop <goal> [--file=path] [--symbol=Name] [--check=\"pnpm test\"]",
-    "       /loop status",
-    "       /pi-loop hide | show | toggle",
-    "       /loop off",
-    "       /loop clear",
+    "Usage: /goal <objective> [--minutes=10] [--turns=12] [--target=90] [--runs=1]",
+    "       /goal <objective> [--file=path] [--symbol=Name] [--check=\"pnpm test\"]",
+    "       /goal status",
+    "       /pi-goal hide | show | toggle",
+    "       /goal stop | off",
+    "       /goal clear",
     "",
     "The first score is a baseline; later scores are feedback. Minutes and turns are capped at 10 minutes and 12 total attempts so unfinished work should carry into the next attempt.",
   ].join("\n");
 }
+
+export const loopHelp = goalHelp;
 
 export function statusText(state: LoopRuntimeState, cwd: string): string {
   const last = state.results[state.results.length - 1];

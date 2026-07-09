@@ -1,439 +1,347 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
-import piLoopExtension from "../extensions/pi-loop/index.ts";
-import { RESUME_DELAY_MS } from "../extensions/pi-loop/constants.ts";
-import { appendLogEntry, deleteLog, readLogEntries } from "../extensions/pi-loop/log.ts";
+import piLoopExtension, { scheduledOutcome } from "../extensions/pi-loop/index.ts";
 
-async function withTempDir(fn) {
-  const dir = mkdtempSync(join(tmpdir(), "pi-loop-e2e-"));
-  try {
-    return await fn(dir);
-  } finally {
-    deleteLog(dir);
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-test("loop_feedback rejects partial acceptance discovery without ending the turn", async () => {
-  await withTempDir(async (dir) => {
-    writeProject(dir);
-
-    const pi = mockPi();
-    const ctx = mockContext(dir);
-    piLoopExtension(pi);
-
-    await pi.commands.get("loop").handler("Plan a DIY small structure --minutes=10 --turns=2 --target=90", ctx);
-    await pi.events.get("agent_start")({}, ctx);
-
-    const response = await pi.tools.get("loop_feedback").execute("partial-acceptance", {
-      summary: "The user picked a DIY small structure, but the exact structure and constraints are still unknown.",
-      status: "continue",
-      acceptanceStatus: "discovering",
-      acceptanceCriteria: ["Plan a DIY small structure"],
-      nextActions: ["Ask which DIY structure type, size, location, budget, and expected output the loop should plan first."],
-    }, new AbortController().signal, () => {}, ctx);
-
-    assert.equal(response.terminate, false);
-    assert.match(response.content[0].text, /Acceptance discovery is not a loop_feedback checkpoint yet/);
-    assert.match(response.content[0].text, /Do not score partial discovery or each ask_user answer/);
-    const entries = readLogEntries(dir);
-    assert.equal(entries.some((entry) => entry.type === "score"), false);
-    assert.equal(pi.stepMessages.some((message) => message.content.startsWith("Step: feedback")), false);
-  });
+test("scheduled agent outcomes distinguish completion, failure, and cancellation", () => {
+  assert.equal(scheduledOutcome({ messages: [{ role: "assistant", stopReason: "stop" }] }), "completed");
+  assert.equal(scheduledOutcome({ messages: [{ role: "assistant", stopReason: "error" }] }), "failed");
+  assert.equal(scheduledOutcome({ messages: [{ role: "assistant", stopReason: "length" }] }), "failed");
+  assert.equal(scheduledOutcome({ messages: [{ role: "assistant", stopReason: "aborted" }] }), "cancelled");
 });
 
-test("legacy loop_feedback without acceptance fields stays scoreable and unstructured", async () => {
-  await withTempDir(async (dir) => {
-    writeProject(dir);
+test("/loop creates and manages a scheduled session task", async () => {
+  const pi = mockPi();
+  const ctx = mockContext(pi);
+  piLoopExtension(pi);
 
-    const pi = mockPi();
-    const ctx = mockContext(dir);
-    piLoopExtension(pi);
+  await pi.events.get("session_start")({}, ctx);
+  await pi.commands.get("loop").handler("5m check whether CI passed", ctx);
 
-    await pi.commands.get("loop").handler("Continue legacy loop --minutes=10 --turns=3 --target=90", ctx);
-    appendLogEntry(dir, legacyScoreEntry());
-    await pi.events.get("session_start")({}, ctx);
-    await pi.events.get("agent_start")({}, ctx);
+  assert.equal(pi.commands.has("pi-loop"), true);
+  assert.deepEqual([...pi.tools.keys()].sort(), ["create_goal", "get_goal", "get_plan", "loop_feedback", "save_plan"]);
+  assert.equal(pi.shortcuts.size, 1);
+  const task = latestState(pi).tasks[0];
+  assert.equal(task.prompt, "check whether CI passed");
+  assert.equal(task.intervalMs, 300_000);
 
-    const response = await pi.tools.get("loop_feedback").execute("legacy-feedback", {
-      summary: "Legacy loop made normal progress after upgrade.",
-      status: "continue",
-      notes: "no structured acceptance metadata was provided by this legacy turn",
-    }, new AbortController().signal, () => {}, ctx);
+  await pi.commands.get("loop").handler(`pause ${task.id}`, ctx);
+  assert.equal(latestState(pi).tasks[0].status, "paused");
+  await pi.commands.get("loop").handler(`resume ${task.id}`, ctx);
+  assert.equal(latestState(pi).tasks[0].status, "active");
 
-    assert.equal(response.terminate, true);
-    assert.doesNotMatch(response.content[0].text, /Acceptance discovery is not a loop_feedback checkpoint yet/);
-    const scores = readLogEntries(dir).filter((entry) => entry.type === "score");
-    assert.equal(scores.length, 2);
-    assert.equal(scores.at(-1).attempt.acceptanceStatus, undefined);
-    assert.equal(scores.at(-1).attempt.acceptanceCriteria, undefined);
-    assert.equal(scores.at(-1).attempt.planTasks, undefined);
-  });
+  await pi.commands.get("loop").handler("status", ctx);
+  assert.match(ctx.notifications.at(-1).message, new RegExp(task.id));
+  assert.match(ctx.notifications.at(-1).message, /every 5m/);
 });
 
-test("loop process treats lightweight feedback as progress and stops only at the configured limit", async () => {
-  await withTempDir(async (dir) => {
-    writeProject(dir);
+test("run now dispatches one bounded scheduled prompt and records history", async () => {
+  const pi = mockPi();
+  const ctx = mockContext(pi);
+  piLoopExtension(pi);
+  await pi.events.get("session_start")({}, ctx);
+  await pi.commands.get("loop").handler("5m inspect new review comments", ctx);
+  const task = latestState(pi).tasks[0];
 
-    const pi = mockPi();
-    const ctx = mockContext(dir);
-    piLoopExtension(pi);
+  await pi.commands.get("loop").handler(`run ${task.id}`, ctx);
+  await Promise.resolve();
+  assert.equal(pi.messages.length, 1);
+  assert.match(pi.messages[0].message.content, /Run one bounded scheduled task/);
+  assert.match(pi.messages[0].message.content, /inspect new review comments/);
+  assert.equal(pi.messages[0].options.triggerTurn, true);
 
-    await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=1 --target=90", ctx);
-    assert.ok(pi.activeTools.includes("loop_feedback"));
-    assert.equal(pi.commands.has("pi-loop"), true);
-    assert.equal(pi.shortcuts.size, 1);
-    assert.match(pi.sentMessages[0].text, /Target context snapshot:/);
-    assert.match(pi.sentMessages[0].text, /scripts: test, typecheck/);
-    assert.deepEqual(pi.stepMessages.map((message) => message.content), [
-      "Step: starting loop — run 1/1, 1 attempts max",
-      "Step: kickoff prompt — sent initial loop instructions",
-    ]);
-
-    await pi.events.get("agent_start")({}, ctx);
-    recordBashCheck(ctx, "pnpm test", "tests passed");
-    const baselineResponse = await pi.tools.get("loop_feedback").execute("feedback-1", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({}, ctx);
-
-    assert.match(baselineResponse.content[0].text, /Acceptance planning recorded/);
-    assert.match(baselineResponse.content[0].text, /Confirmed acceptance criteria: 1/);
-    assert.doesNotMatch(baselineResponse.content[0].text, /Heuristic|Raw score|Score:|Outcome:|Blockers:/);
-    assert.equal(baselineResponse.terminate, true);
-    assert.equal(pi.activeTools.includes("loop_feedback"), true);
-    assert.ok(pi.stepMessages.some((message) => message.content === "Step: acceptance confirmed — criteria confirmed with trackable plan"));
-    assert.ok(pi.stepMessages.some((message) => message.content === "Step: review loop — loop 1, turn 0/1, total 0/1"));
-    await sleep(RESUME_DELAY_MS + 20);
-    assert.match(pi.sentMessages.at(-1).text, /^Continue the pi-loop workflow/);
-    assert.doesNotMatch(pi.sentMessages.at(-1).text, /^Start the pi-loop workflow/);
-
-    await pi.events.get("agent_start")({}, ctx);
-    recordBashCheck(ctx, "pnpm test", "tests passed");
-    recordBashCheck(ctx, "pnpm typecheck", "typecheck passed");
-    recordBashCheck(ctx, "pnpm audit --audit-level high", "No known vulnerabilities found");
-    const improvedResponse = await pi.tools.get("loop_feedback").execute("feedback-2", feedbackParams(), new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({}, ctx);
-
-    assert.match(improvedResponse.content[0].text, /Progress: \+/);
-    assert.match(improvedResponse.content[0].text, /new best recorded; continue/);
-    assert.match(improvedResponse.content[0].text, /Outcome: successful_improvement/);
-    assert.doesNotMatch(improvedResponse.content[0].text, /Heuristic|Raw score|Score:/);
-    assert.equal(pi.activeTools.includes("loop_feedback"), false);
-    assert.ok(pi.stepMessages.some((message) => message.content.startsWith("Step: starting agent work — loop 1, turn 1/1")));
-    assert.ok(pi.stepMessages.some((message) => /Step: feedback — \+/.test(message.content)));
-
-    const entries = readLogEntries(dir);
-    const processEntries = entries.filter((entry) => entry.event !== "loop_step");
-    assert.deepEqual(processEntries.map((entry) => entry.type), ["config", "event", "score", "event", "score", "event"]);
-    assert.ok(entries.some((entry) => entry.event === "loop_step" && entry.reason === "feedback"));
-    assert.equal(processEntries[0].sessionId, "test-session");
-    assert.equal(processEntries[0].targetContext.baseline.packageManager, "pnpm");
-    assert.equal(processEntries[1].event, "turn_started");
-    assert.equal(processEntries[1].globalTurn, 1);
-    assert.equal(processEntries[2].outcome, "needs_iteration");
-    assert.equal(processEntries[2].run, 1);
-    assert.equal(processEntries[2].globalTurn, 1);
-    assert.equal(processEntries[2].attempt.stopIntent, "continue");
-    assert.equal(processEntries[3].event, "turn_started");
-    assert.equal(processEntries[3].globalTurn, 2);
-    assert.equal(processEntries[4].outcome, "successful_improvement");
-    assert.equal(processEntries[4].improvement > 0, true);
-    assert.equal(processEntries[4].attempt.acceptanceStatus, "confirmed");
-    assert.deepEqual(processEntries[4].attempt.acceptanceCriteria, ["source behavior is verified by the configured checks"]);
-    assert.match(processEntries[5].reason, /all runs exhausted/);
-
-    const finalMessage = pi.sentMessages.at(-1).text;
-    assert.match(finalMessage, /pi-loop finished/);
-    assert.match(finalMessage, /TL;DR:/);
-    assert.doesNotMatch(finalMessage, /Accepted/);
-    assert.match(finalMessage, /Accomplished:/);
-    assert.match(finalMessage, /Loop steps:/);
-    assert.match(finalMessage, /run 1, turn 1/);
-    assert.match(finalMessage, /run 1, turn 2/);
-  });
+  await pi.events.get("agent_end")({}, ctx);
+  const completed = latestState(pi).tasks[0];
+  assert.equal(completed.running, false);
+  assert.equal(completed.history.length, 1);
 });
 
-test("missing-feedback recovery records feedback without counting a new loop turn", async () => {
-  await withTempDir(async (dir) => {
-    writeProject(dir);
+test("Loop, Goal, and Plan arbitrate autonomous ownership inside one package", async () => {
+  const pi = mockPi();
+  const ctx = mockContext(pi);
+  piLoopExtension(pi);
+  await pi.events.get("session_start")({}, ctx);
 
-    const pi = mockPi();
-    const ctx = mockContext(dir);
-    piLoopExtension(pi);
+  assert.equal(pi.commands.has("loop"), true);
+  assert.equal(pi.commands.has("goal"), true);
+  assert.equal(pi.commands.has("plan"), true);
 
-    await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=3 --target=90", ctx);
-    await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("loop_feedback").execute("acceptance-ready", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Acceptance criteria confirmed." }] }, ctx);
+  await pi.commands.get("goal").handler("verify the migration", ctx);
+  await pi.commands.get("loop").handler("5m inspect CI", ctx);
+  const task = latestState(pi).tasks[0];
+  const messageCount = pi.messages.length;
+  await pi.commands.get("loop").handler(`run ${task.id}`, ctx);
+  await Promise.resolve();
+  assert.equal(pi.messages.length, messageCount);
+  assert.equal(latestState(pi).tasks[0].pending, true);
 
-    await pi.events.get("agent_start")({}, ctx);
-    recordBashCheck(ctx, "pnpm test", "tests passed");
-    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Need to record feedback." }] }, ctx);
+  await pi.commands.get("goal").handler("clear", ctx);
+  await pi.commands.get("loop").handler(`run ${task.id}`, ctx);
+  await Promise.resolve();
+  assert.match(pi.messages.at(-1).message.content, /Run one bounded scheduled task/);
 
-    let processEntries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
-    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1, 2]);
-    assert.equal(processEntries.at(-1).event, "missing_score");
-
-    await pi.events.get("agent_start")({}, ctx);
-    const recoveryResponse = await pi.tools.get("loop_feedback").execute("feedback-recovery", feedbackParams(), new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Feedback recorded." }] }, ctx);
-
-    assert.equal(recoveryResponse.terminate, true);
-    assert.ok(pi.stepMessages.some((message) => message.content === "Step: recording feedback — loop 1, turn 1/3, total 1/3"));
-
-    processEntries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
-    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1, 2]);
-    const scores = processEntries.filter((entry) => entry.type === "score");
-    assert.equal(scores.length, 2);
-    assert.equal(scores[1].turn, 2);
-    assert.equal(scores[1].globalTurn, 2);
-
-    await pi.events.get("agent_start")({}, ctx);
-    processEntries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
-    assert.deepEqual(processEntries.filter((entry) => entry.event === "turn_started").map((entry) => entry.globalTurn), [1, 2, 3]);
-  });
+  await pi.commands.get("goal").handler("start another goal", ctx);
+  assert.match(ctx.notifications.at(-1).message, /Another autonomous mode is active/);
+  await pi.commands.get("plan").handler("plan another change", ctx);
+  assert.match(ctx.notifications.at(-1).message, /scheduled run blocks Plan mode/);
 });
 
-test("pi-loop alias, hide/show commands, and shortcut control the floating panel", async () => {
-  await withTempDir(async (dir) => {
-    writeProject(dir);
-    const pi = mockPi();
-    const ctx = mockContext(dir, true);
-    piLoopExtension(pi);
+test("provider retries retain Goal and scheduled ownership without double-driving", async () => {
+  const pi = mockPi();
+  const ctx = mockContext(pi);
+  piLoopExtension(pi);
+  await pi.events.get("session_start")({}, ctx);
 
-    await pi.commands.get("pi-loop").handler("Improve source.ts --minutes=10 --turns=2", ctx);
-    assert.equal(ctx.customCalls, 1);
-    assert.equal(ctx.statusSetCount, 0);
+  await pi.commands.get("goal").handler("verify retry behavior", ctx);
+  await pi.events.get("agent_start")({}, ctx);
+  const goalMessageCount = pi.messages.length;
+  const retryableError = { messages: [{ role: "assistant", stopReason: "error", errorMessage: "503 service unavailable" }] };
+  await pi.events.get("agent_end")(retryableError, ctx);
+  const duringGoalRetry = await pi.tools.get("get_goal").execute("goal-retry", {}, undefined, undefined, ctx);
+  assert.equal(duringGoalRetry.details.goal.active, true);
+  assert.equal(duringGoalRetry.details.goal.totalTurnsStarted, 1);
+  assert.equal(pi.messages.length, goalMessageCount);
 
-    await pi.commands.get("pi-loop").handler("hide", ctx);
-    assert.equal(ctx.hiddenHandles, 1);
-    assert.equal(ctx.statusSetCount, 0);
+  await pi.events.get("agent_start")({}, ctx);
+  const afterGoalRetryStart = await pi.tools.get("get_goal").execute("goal-retry-start", {}, undefined, undefined, ctx);
+  assert.equal(afterGoalRetryStart.details.goal.totalTurnsStarted, 1);
+  await pi.commands.get("goal").handler("clear", ctx);
 
-    await pi.commands.get("pi-loop").handler("show", ctx);
-    assert.equal(ctx.customCalls, 2);
-    assert.equal(ctx.statusSetCount, 0);
+  await pi.commands.get("loop").handler("5m inspect retry", ctx);
+  const task = latestState(pi).tasks[0];
+  await pi.commands.get("loop").handler(`run ${task.id}`, ctx);
+  await Promise.resolve();
+  await pi.events.get("agent_end")(retryableError, ctx);
+  assert.equal(latestState(pi).tasks[0].running, true);
 
-    const shortcut = [...pi.shortcuts.values()][0];
-    await shortcut.handler(ctx);
-    assert.equal(ctx.hiddenHandles, 2);
-    assert.equal(ctx.statusSetCount, 0);
-  });
+  await pi.events.get("agent_start")({}, ctx);
+  assert.equal(latestState(pi).tasks[0].running, true);
+  await pi.events.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+  assert.equal(latestState(pi).tasks[0].running, false);
+  assert.equal(latestState(pi).tasks[0].history.at(-1).outcome, "completed");
 });
 
-test("loop clears extension UI when it finishes", async () => {
-  await withTempDir(async (dir) => {
-    writeProject(dir);
-    const pi = mockPi();
-    const ctx = mockContext(dir, true);
-    piLoopExtension(pi);
+test("ordinary length ends terminally while confirmed overflow retains ownership through compaction", async () => {
+  const pi = mockPi();
+  const ctx = mockContext(pi);
+  piLoopExtension(pi);
+  await pi.events.get("session_start")({}, ctx);
 
-    await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=2", ctx);
-    await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("loop_feedback").execute("feedback-1", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({}, ctx);
-    await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("loop_feedback").execute("feedback-2", feedbackParams(), new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({}, ctx);
+  await pi.commands.get("loop").handler("5m ordinary length", ctx);
+  const ordinary = latestState(pi).tasks[0];
+  await pi.commands.get("loop").handler(`run ${ordinary.id}`, ctx);
+  await Promise.resolve();
+  await pi.events.get("agent_end")({ messages: [{ role: "assistant", stopReason: "length", usage: { input: 100, cacheRead: 0, output: 50 } }] }, ctx);
+  assert.equal(latestState(pi).tasks[0].running, false);
+  assert.equal(latestState(pi).tasks[0].history.at(-1).outcome, "failed");
 
-    assert.equal(ctx.widgetCleared, true);
-    assert.equal(ctx.statusCleared, true);
-  });
+  await pi.commands.get("goal").handler("manual turn after ordinary length", ctx);
+  await pi.events.get("agent_start")({}, ctx);
+  const manualGoal = await pi.tools.get("get_goal").execute("manual-goal", {}, undefined, undefined, ctx);
+  assert.equal(manualGoal.details.goal.totalTurnsStarted, 1);
+  await pi.commands.get("goal").handler("clear", ctx);
+  await pi.commands.get("loop").handler(`cancel ${ordinary.id}`, ctx);
+
+  await pi.commands.get("loop").handler("5m overflow retry", ctx);
+  const overflow = latestState(pi).tasks[0];
+  await pi.commands.get("loop").handler(`run ${overflow.id}`, ctx);
+  await Promise.resolve();
+  const overflowEnd = { messages: [{ role: "assistant", stopReason: "length", usage: { input: 990, cacheRead: 0, output: 0 } }] };
+  await pi.events.get("agent_end")(overflowEnd, ctx);
+  await pi.events.get("session_before_compact")({ reason: "overflow", willRetry: true }, ctx);
+  assert.equal(latestState(pi).tasks[0].running, true);
+  await pi.events.get("session_compact")({ reason: "overflow", willRetry: true }, ctx);
+  await pi.events.get("agent_start")({}, ctx);
+  assert.equal(latestState(pi).tasks[0].running, true);
+  await pi.events.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+  assert.equal(latestState(pi).tasks[0].history.at(-1).outcome, "completed");
 });
 
-test("multi-run process advances after a failed run and stops when all runs are exhausted", async () => {
-  await withTempDir(async (dir) => {
-    writeProject(dir);
-    const pi = mockPi();
-    const ctx = mockContext(dir);
-    piLoopExtension(pi);
+test("goal-style /loop input is not executed and points to /goal", async () => {
+  const pi = mockPi();
+  const ctx = mockContext(pi);
+  piLoopExtension(pi);
+  await pi.commands.get("loop").handler("Improve tests until coverage reaches 90%", ctx);
 
-    await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=1 --runs=2 --target=95", ctx);
-    await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("loop_feedback").execute("acceptance-ready", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Acceptance ready" }] }, ctx);
-    await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("loop_feedback").execute("feedback-1", { ...feedbackParams(), status: "blocked", notes: "important requirement missing" }, new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Continuing" }] }, ctx);
-
-    let entries = readLogEntries(dir);
-    let processEntries = entries.filter((entry) => entry.event !== "loop_step");
-    assert.deepEqual(processEntries.map((entry) => entry.type), ["config", "event", "score", "event", "score", "event", "event"]);
-    assert.equal(processEntries[1].event, "turn_started");
-    assert.equal(processEntries[5].event, "run_stopped");
-    assert.equal(processEntries[6].event, "run_started");
-    assert.ok(pi.activeTools.includes("loop_feedback"));
-    assert.ok(pi.stepMessages.some((message) => message.content === "Step: restarting loop 2 — run 2/2"));
-
-    await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("loop_feedback").execute("feedback-2", feedbackParams(), new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({}, ctx);
-
-    entries = readLogEntries(dir);
-    processEntries = entries.filter((entry) => entry.event !== "loop_step");
-    assert.equal(processEntries.at(-2).run, 2);
-    assert.equal(processEntries.at(-2).globalTurn, 3);
-    assert.match(processEntries.at(-1).reason, /all runs exhausted/);
-    assert.equal(pi.activeTools.includes("loop_feedback"), false);
-  });
+  assert.equal(pi.messages.length, 0);
+  assert.equal(pi.entries.length, 0);
+  assert.match(ctx.notifications.at(-1).message, /pi-loop now runs scheduled tasks/);
+  assert.match(ctx.notifications.at(-1).message, /\/goal Improve tests until coverage reaches 90%/);
 });
 
-test("missing score and premature completion claims are logged", async () => {
-  await withTempDir(async (dir) => {
-    writeProject(dir);
-    const pi = mockPi();
-    const ctx = mockContext(dir);
-    piLoopExtension(pi);
-
-    await pi.commands.get("loop").handler("Improve source.ts --minutes=10 --turns=2 --target=95", ctx);
-    await pi.events.get("agent_start")({}, ctx);
-    await pi.tools.get("loop_feedback").execute("acceptance-ready", weakFeedbackParams(), new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Acceptance ready" }] }, ctx);
-
-    await pi.events.get("agent_start")({}, ctx);
-    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "Done" }] }, ctx);
-
-    let entries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
-    assert.equal(entries.at(-1).event, "missing_score");
-    assert.equal(entries.at(-1).details.claimedCompletion, true);
-
-    await pi.tools.get("loop_feedback").execute("feedback-1", { ...feedbackParams(), status: "blocked", notes: "important requirement missing" }, new AbortController().signal, () => {}, ctx);
-    await pi.events.get("agent_end")({ messages: [{ role: "assistant", content: "All set" }] }, ctx);
-
-    entries = readLogEntries(dir).filter((entry) => entry.event !== "loop_step");
-    assert.equal(entries.at(-1).event, "premature_stop");
-    assert.equal(entries.at(-1).reason, "completion claim before configured loop stop");
-  });
-});
-
-function legacyScoreEntry() {
-  return {
-    type: "score",
-    run: 1,
-    turn: 1,
-    globalTurn: 1,
-    timestamp: Date.now(),
-    summary: "legacy pre-upgrade feedback",
-    score: 60,
-    rawScore: 60,
-    targetScore: 90,
-    baselineScore: 60,
-    progressPercent: null,
-    passedDefinition: false,
-    improvement: null,
-    blockers: [],
-    nextActions: ["continue legacy loop work"],
-    categories: [],
+test("session tree navigation restores the selected branch schedule", async () => {
+  const pi = mockPi();
+  const ctx = mockContext(pi);
+  piLoopExtension(pi);
+  await pi.events.get("session_start")({}, ctx);
+  await pi.commands.get("loop").handler("10m old branch task", ctx);
+  const oldState = latestState(pi);
+  const newState = {
+    ...oldState,
+    tasks: oldState.tasks.map((task) => ({ ...task, id: "newbranch", prompt: "new branch task" })),
   };
-}
+  ctx.setBranch([{ type: "custom", customType: "pi-loop-schedule", data: newState }]);
 
-function writeProject(dir) {
-  writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "node --test", typecheck: "tsc --noEmit" } }));
-  writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-  writeFileSync(join(dir, "source.ts"), "export const value = 1;\n");
-  writeFileSync(join(dir, "source.test.mjs"), "import 'node:assert/strict';\n");
-}
+  await pi.events.get("session_tree")({}, ctx);
+  await pi.commands.get("loop").handler("status", ctx);
+  assert.match(ctx.notifications.at(-1).message, /new branch task/);
+  assert.doesNotMatch(ctx.notifications.at(-1).message, /old branch task/);
+});
 
-function weakFeedbackParams() {
-  return {
-    summary: "Partial feedback recorded; status output still needs verification.",
-    status: "continue",
-    notes: "targeted test passed, but status output was not validated yet",
-    acceptanceStatus: "confirmed",
-    acceptanceCriteria: ["source behavior is verified by the configured checks"],
-    planTasks: [
-      { id: "T1", title: "Run focused source test", status: "completed", evidence: "pnpm test passed" },
-      { id: "T2", title: "Run typecheck", status: "pending" },
-    ],
-  };
-}
-
-function feedbackParams() {
-  return {
-    summary: "Verified source behavior with focused checks.",
-    status: "ready_for_review",
-    notes: "source behavior is ready for final refinement",
-    planTasks: [
-      { id: "T1", title: "Run focused source test", status: "completed", evidence: "pnpm test passed" },
-      { id: "T2", title: "Run typecheck", status: "completed", evidence: "pnpm typecheck passed" },
-    ],
-    nextActions: ["carry any leftovers into the next attempt"],
-  };
-}
-
-function confirmedFeedbackParams() {
-  return {
-    ...feedbackParams(),
-    acceptanceStatus: "confirmed",
-    acceptanceCriteria: ["source behavior is verified by the configured checks"],
-  };
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function recordBashCheck(ctx, command, text, exitCode = 0) {
-  ctx.branchEntries.push({
-    type: "message",
-    timestamp: new Date().toISOString(),
-    message: {
-      role: "toolResult",
-      toolName: "bash",
-      content: [{ type: "text", text }],
-      isError: exitCode !== 0,
-      details: { command, exitCode },
+test("Plan restore stays read-only and branch navigation restores prior tools", async () => {
+  const planEntry = {
+    type: "custom",
+    customType: "pi-plan",
+    data: {
+      planning: true,
+      plan: null,
+      sourcePrompt: "plan the migration",
+      advisorEnabled: true,
+      toolsBeforePlan: ["read", "edit", "create_goal"],
     },
-  });
+  };
+  const pi = mockPi();
+  pi.activeTools = ["read", "edit", "create_goal"];
+  const ctx = mockContext(pi, [planEntry]);
+  piLoopExtension(pi);
+
+  await pi.events.get("session_start")({}, ctx);
+  assert.deepEqual(pi.activeTools.sort(), ["read", "save_plan"]);
+
+  ctx.setBranch([{ type: "custom", customType: "unrelated", data: {} }]);
+  await pi.events.get("session_tree")({}, ctx);
+  assert.deepEqual(pi.activeTools.sort(), ["create_goal", "edit", "read"]);
+});
+
+test("restored Plan yields when an intelligent Goal already owns autonomy", async () => {
+  const planEntry = {
+    type: "custom",
+    customType: "pi-plan",
+    data: {
+      planning: true,
+      plan: null,
+      sourcePrompt: "plan a conflicting change",
+      advisorEnabled: true,
+      toolsBeforePlan: ["read", "edit", "create_goal"],
+    },
+  };
+  const pi = mockPi();
+  const ctx = mockContext(pi);
+  piLoopExtension(pi);
+  await pi.events.get("session_start")({}, ctx);
+  await pi.commands.get("goal").handler("verify ownership", ctx);
+
+  ctx.setBranch([planEntry]);
+  await pi.events.get("session_tree")({}, ctx);
+  assert.equal(pi.activeTools.includes("loop_feedback"), true);
+  assert.equal(pi.activeTools.includes("save_plan"), false);
+  await pi.commands.get("goal").handler("clear", ctx);
+});
+
+test("Goal stop remains a management command and never becomes a new objective", async () => {
+  const pi = mockPi();
+  const ctx = mockContext(pi);
+  piLoopExtension(pi);
+  await pi.events.get("session_start")({}, ctx);
+  await pi.commands.get("goal").handler("verify stop behavior", ctx);
+  await pi.commands.get("goal").handler("stop", ctx);
+
+  const result = await pi.tools.get("get_goal").execute("get-goal", {}, undefined, undefined, ctx);
+  assert.equal(result.details.goal.active, false);
+  assert.equal(result.details.goal.objective, "verify stop behavior");
+  assert.equal(result.details.goal.stopReason, "stopped by user");
+  await pi.commands.get("goal").handler("clear", ctx);
+  const messageCount = pi.messages.length;
+  await pi.commands.get("goal").handler("stop", ctx);
+  assert.equal(pi.messages.length, messageCount);
+  assert.match(ctx.notifications.at(-1).message, /No intelligent Goal is active/);
+});
+
+test("session restore reloads unexpired scheduled tasks", async () => {
+  const firstPi = mockPi();
+  const firstCtx = mockContext(firstPi);
+  piLoopExtension(firstPi);
+  await firstPi.events.get("session_start")({}, firstCtx);
+  await firstPi.commands.get("loop").handler("10m check the deploy", firstCtx);
+  const saved = latestState(firstPi);
+
+  const restoredPi = mockPi();
+  const restoredCtx = mockContext(restoredPi, [{ type: "custom", customType: "pi-loop-schedule", data: saved }]);
+  piLoopExtension(restoredPi);
+  await restoredPi.events.get("session_start")({}, restoredCtx);
+  await restoredPi.commands.get("loop").handler("status", restoredCtx);
+  assert.match(restoredCtx.notifications.at(-1).message, /check the deploy/);
+});
+
+function latestState(pi) {
+  return pi.entries.filter((entry) => entry.customType === "pi-loop-schedule").at(-1).data;
 }
 
 function mockPi() {
+  const events = new Map();
+  const channels = new Map();
+  const lifecycle = new Map();
+  events.on = (name, handler) => {
+    channels.set(name, [...(channels.get(name) ?? []), handler]);
+    return () => channels.set(name, (channels.get(name) ?? []).filter((candidate) => candidate !== handler));
+  };
+  events.emit = (name, payload) => {
+    for (const handler of channels.get(name) ?? []) handler(payload);
+  };
   return {
     commands: new Map(),
     tools: new Map(),
-    events: new Map(),
+    renderers: new Map(),
     activeTools: [],
-    sentMessages: [],
-    stepMessages: [],
+    events,
     shortcuts: new Map(),
+    messages: [],
+    entries: [],
     registerCommand(name, command) { this.commands.set(name, command); },
-    registerShortcut(shortcut, options) { this.shortcuts.set(shortcut, options); },
     registerTool(tool) { this.tools.set(tool.name, tool); },
-    on(name, handler) { this.events.set(name, handler); },
-    getActiveTools() { return this.activeTools; },
-    setActiveTools(tools) { this.activeTools = tools; },
-    sendMessage(message, options) { this.stepMessages.push({ ...message, options }); },
-    sendUserMessage(text, options) { this.sentMessages.push({ text, options }); },
+    registerMessageRenderer(name, renderer) { this.renderers.set(name, renderer); },
+    registerShortcut(shortcut, handler) { this.shortcuts.set(shortcut, handler); },
+    getActiveTools() { return [...this.activeTools]; },
+    setActiveTools(tools) { this.activeTools = [...tools]; },
+    on(name, handler) {
+      lifecycle.set(name, [...(lifecycle.get(name) ?? []), handler]);
+      this.events.set(name, async (...args) => {
+        let result;
+        for (const candidate of lifecycle.get(name) ?? []) result = await candidate(...args) ?? result;
+        return result;
+      });
+    },
+    sendMessage(message, options) { this.messages.push({ message, options }); },
+    sendUserMessage(text, options) { this.messages.push({ message: { content: text }, options }); },
+    appendEntry(customType, data) { this.entries.push({ type: "custom", customType, data }); },
   };
 }
 
-function mockContext(cwd, hasUI = false) {
-  const ctx = {
-    cwd,
-    hasUI,
-    widgetCleared: false,
-    statusCleared: false,
-    hiddenHandles: 0,
-    customCalls: 0,
-    statusSetCount: 0,
-    branchEntries: [],
+function mockContext(pi, branchEntries = []) {
+  const notifications = [];
+  let branch = branchEntries;
+  return {
+    cwd: "/tmp/pi-loop-unified-e2e",
+    model: { contextWindow: 1_000 },
+    hasUI: true,
+    notifications,
     ui: {
-      notify() {},
-      setWidget(_name, widget) { if (widget === undefined) ctx.widgetCleared = true; },
-      setStatus(_name, status) { if (status === undefined) ctx.statusCleared = true; else ctx.statusSetCount++; },
-      custom(factory, options) {
-        ctx.customCalls++;
-        const component = factory({ terminal: { rows: 40 }, requestRender() {} }, { fg: (_kind, value) => value }, {}, () => {});
-        options.onHandle?.({ hide() { ctx.hiddenHandles++; component.dispose?.(); } });
-        return Promise.resolve();
-      },
-      theme: { fg: (_kind, value) => value },
+      notify(message, level) { notifications.push({ message, level }); },
+      setStatus() {},
+      setWidget() {},
+      confirm: async () => true,
+      select: async () => "Keep plan",
+      editor: async () => undefined,
     },
     isIdle: () => true,
     hasPendingMessages: () => false,
-    sessionManager: { getSessionId: () => "test-session", getBranch: () => ctx.branchEntries },
+    getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
+    isProjectTrusted: () => false,
+    setBranch(entries) { branch = entries; },
+    sessionManager: {
+      getSessionId: () => "unified-e2e-session",
+      getBranch: () => branch.length ? branch : pi.entries,
+      getEntries: () => branch.length ? branch : pi.entries,
+    },
   };
-  return ctx;
 }

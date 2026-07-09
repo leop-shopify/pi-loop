@@ -1,16 +1,17 @@
 {
   "name": "pi-loop",
-  "version": "0.1.5",
+  "version": "0.3.1",
   "type": "module",
-  "description": "Pi extension for bounded, score-guided software engineering loops.",
+  "description": "Intelligent goals, scheduled loops, and structured planning for Pi.",
   "keywords": [
     "pi-package",
     "pi",
     "pi-extension",
-    "agent-loop",
+    "scheduled-tasks",
+    "recurring-tasks",
+    "goals",
+    "planning",
     "software-quality",
-    "testing",
-    "rails",
     "scoring"
   ],
   "license": "MIT",
@@ -20,42 +21,42 @@
   "packageManager": "pnpm@10.28.0",
   "pi": {
     "extensions": [
-      "./node_modules/pi-ace-adapter/dist/index.js",
       "./extensions/pi-loop/index.ts"
     ],
     "skills": [
-      "./node_modules/pi-ace-adapter/skills"
-    ],
-    "prompts": [
-      "./node_modules/pi-ace-adapter/prompts"
+      "skills"
     ]
   },
   "files": [
     "ace",
-    "extensions",
+    "extensions/pi-loop/*.ts",
+    "extensions/pi-loop/plan",
+    "extensions/pi-loop/scoring",
+    "skills",
     "README.md",
     "package.json"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs tests/intent-advisor.test.cjs tests/plan-runtime.test.cjs tests/plan-safety.test.cjs tests/plan-state.test.cjs",
     "typecheck": "tsc --noEmit",
     "check": "pnpm test && pnpm typecheck",
-    "smoke": "node tests/smoke-pi-extension.mjs"
+    "smoke": "node tests/smoke-pi-extension.mjs",
+    "pack:dry": "pnpm pack --dry-run"
   },
   "dependencies": {
-    "pi-ace-adapter": "file:../pi-ace-adapter",
     "typebox": "1.2.14"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-ai": ">=0.80.2",
+    "@earendil-works/pi-coding-agent": ">=0.80.2",
+    "@earendil-works/pi-tui": ">=0.80.2"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.80.2",
     "@earendil-works/pi-coding-agent": "0.80.2",
     "@earendil-works/pi-tui": "0.80.2",
     "@types/node": "22.15.30",
+    "jiti": "^2.7.0",
     "typescript": "^5.9.3"
   }
 }

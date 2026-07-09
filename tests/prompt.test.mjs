@@ -109,7 +109,7 @@ test("continue prompt includes ACE context when provided", () => {
 test("kickoff prompt starts with acceptance discovery and bounded spawned-agent research guidance", () => {
   const prompt = kickoffPrompt(loopState());
 
-  assert.match(prompt, /First \/loop step: run acceptance discovery before implementation/);
+  assert.match(prompt, /First \/goal step: run acceptance discovery before implementation/);
   assert.match(prompt, /agent must decide whether acceptance criteria are present, user-confirmed, and sufficient/);
   assert.match(prompt, /User-provided acceptance bullets are strong signals/);
   assert.match(prompt, /Do not treat agent-invented criteria as final/);
@@ -127,7 +127,7 @@ test("kickoff prompt starts with acceptance discovery and bounded spawned-agent 
 test("system prompt advertises acceptance discovery, short capped defaults, and bounded spawned-agent pacing", () => {
   const prompt = systemPromptAddon(loopState({ maxMinutes: 10, maxTurns: 12 }));
 
-  assert.match(prompt, /First \/loop step: run acceptance discovery before implementation/);
+  assert.match(prompt, /First \/goal step: run acceptance discovery before implementation/);
   assert.match(prompt, /Defaults are 10 minutes, 12 turns, and 1 run/);
   assert.match(prompt, /minutes are capped at 10/);
   assert.match(prompt, /pi-loop cannot interrupt child agents for you/);

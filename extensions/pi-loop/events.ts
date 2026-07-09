@@ -1,6 +1,7 @@
 import type { AgentEndEvent, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { buildAceLoopContext } from "./ace-context.ts";
+import { createAgentEndGate, type AgentEndGate } from "./agent-end-gate.ts";
 import { MAX_UNSCORED_REMINDERS } from "./constants.ts";
 import type { LoopController } from "./controller.ts";
 import { appendLogEntry, reconstructLoopState } from "./log.ts";
@@ -11,7 +12,7 @@ import { acceptanceReady, resumeLoopTimer } from "./state.ts";
 import { loopTurnDetail, sendLoopStepMessage } from "./step-message.ts";
 import { updateLoopWidget } from "./ui.ts";
 
-export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController): void {
+export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController, agentEndGate: AgentEndGate = createAgentEndGate()): void {
   pi.on("session_start", async (_event, ctx) => {
     const restored = reconstructLoopState(ctx.cwd, Date.now(), controller.sessionKey(ctx));
     controller.clearSession(ctx);
@@ -21,10 +22,20 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    agentEndGate.cancel();
     controller.clearSession(ctx);
   });
 
+  pi.on("session_before_compact", (event) => {
+    if (event.reason === "overflow") agentEndGate.compactionStarted(event.willRetry);
+  });
+
+  pi.on("session_compact", (event) => {
+    if (event.reason === "overflow") agentEndGate.compactionFinished(event.willRetry);
+  });
+
   pi.on("agent_start", async (_event, ctx) => {
+    if (agentEndGate.consumeRetryStart()) return;
     const state = controller.getState(ctx);
     if (!state.active) return;
     controller.cancelPendingResume(state);
@@ -55,7 +66,9 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
   pi.on("agent_end", async (event, ctx) => {
     const state = controller.getState(ctx);
     if (!state.active) return;
-    recordTurnDuration(state);
+    return agentEndGate.defer(event, ctx, async () => {
+      if (!state.active) return;
+      recordTurnDuration(state);
     captureContextUsage(ctx, state);
     updateLoopWidget(ctx, state);
     sendLoopStepMessage(pi, state, "review loop", loopTurnDetail(state), ctx.cwd);
@@ -124,8 +137,9 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController)
     }
 
     sendLoopStepMessage(pi, state, "continuing loop", "scheduled refined prompt", ctx.cwd);
-    const aceContext = await buildAceLoopContext(ctx);
-    controller.scheduleResume(ctx, state, continuePrompt(state, { aceContext }));
+      const aceContext = await buildAceLoopContext(ctx);
+      controller.scheduleResume(ctx, state, continuePrompt(state, { aceContext }));
+    });
   });
 
   pi.on("before_agent_start", async (event, ctx) => {

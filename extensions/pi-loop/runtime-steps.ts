@@ -131,7 +131,7 @@ function finalizeRuntimeRows(rows: RuntimeStepDraft[], activeLoop: boolean): Run
 }
 
 function configDetail(state: LoopRuntimeState): string {
-  return state.goal ? `${state.maxTurns} turns, ${state.maxMinutes}m, ${state.maxRuns} run(s)` : "waiting for /loop goal";
+  return state.goal ? `${state.maxTurns} turns, ${state.maxMinutes}m, ${state.maxRuns} run(s)` : "waiting for /goal objective";
 }
 
 function contextDetail(state: LoopRuntimeState): string {

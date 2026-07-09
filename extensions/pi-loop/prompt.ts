@@ -167,11 +167,11 @@ export function systemPromptAddon(state: LoopRuntimeState): string {
 
 function acceptanceCriteriaGateInstruction(): string {
   return [
-    "First /loop step: run acceptance discovery before implementation.",
+    "First /goal step: run acceptance discovery before implementation.",
     "- The agent must decide whether acceptance criteria are present, user-confirmed, and sufficient for a plan. Do not rely on command parsing or treat bullets in the prompt as automatically enough.",
     "- User-provided acceptance bullets are strong signals, but the agent may still say they are insufficient, ambiguous, too high-level, or missing critical context; then mark acceptanceStatus as proposed/discovering and ask or research before planning.",
     "- Do not treat agent-invented criteria as final. Candidate criteria from the agent or spawned research must go back to the user for selection, editing, or rejection.",
-    "- If the goal is vague, ask contextual discovery questions instead of asking generically for 'acceptance criteria'. Example: for '/loop lets build a house', ask whether the user owns land, starts from zero or renovation, needs foundation/plans/permits/appliances, budget/timeline/location constraints, and what outcome this loop should produce.",
+    "- If the goal is vague, ask contextual discovery questions instead of asking generically for 'acceptance criteria'. Example: for '/goal lets build a house', ask whether the user owns land, starts from zero or renovation, needs foundation/plans/permits/appliances, budget/timeline/location constraints, and what outcome this Goal should produce.",
     "- If the user says they do not know, use bounded research/delegation to bring back candidate paths, tradeoffs, and candidate acceptance criteria for the user to select, edit, or reject.",
     "- Only after the agent judges the user-confirmed criteria sufficient, build or update a trackable plan with task statuses (pending, in_progress, completed, blocked).",
     "- Do not call loop_feedback after every discovery question or partial answer. Use loop_feedback only once acceptanceStatus is confirmed with acceptanceCriteria and planTasks, or later during normal work after the acceptance gate is open.",

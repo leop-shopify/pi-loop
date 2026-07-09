@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -22,11 +22,17 @@ test("loop args default to short capped loops", () => {
   assert.match(loopHelp(), /10 minutes and 12 total attempts/);
 });
 
+test("shipped Goal skill advertises only parser-supported bounds", () => {
+  const skill = readFileSync(new URL("../skills/pi-goal-writer/SKILL.md", import.meta.url), "utf8");
+  assert.doesNotMatch(skill, /--tokens/);
+  for (const flag of ["--minutes", "--turns", "--target", "--runs"]) assert.match(skill, new RegExp(flag));
+});
+
 test("loop args parse panel visibility commands", () => {
   assert.equal(parseLoopArgs("hide").command, "hide");
   assert.equal(parseLoopArgs("show").command, "show");
   assert.equal(parseLoopArgs("toggle").command, "toggle");
-  assert.match(loopHelp(), /\/pi-loop hide \| show \| toggle/);
+  assert.match(loopHelp(), /\/pi-goal hide \| show \| toggle/);
 });
 
 test("quote-aware args parse explicit files, symbols, checks, and runs", () => {

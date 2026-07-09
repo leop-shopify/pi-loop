@@ -9,7 +9,7 @@ Use this playbook to guide pi-loop attempts for general software engineering wor
 3. Inspect the relevant source, tests, docs, and package scripts before editing.
 4. Make one focused change. Avoid unrelated cleanup, broad rewrites, or speculative abstractions.
 5. Run the narrowest meaningful check first, then one broader gate when shared behavior or packaging changed.
-6. Call `score_loop_result` with concrete evidence: requirements, changed artifacts, commands, review gates, risks, and next actions.
+6. Let the scorer inspect tool results, then call `loop_feedback` with a concise summary, status, acceptance state, plan-task updates, measured metrics, hypothesis, verdict, and short next actions.
 7. Treat baseline/new-best scores as feedback only. Continue until the configured loop limit or user stop condition.
 
 ## Strategy by task type
@@ -18,11 +18,11 @@ Use this playbook to guide pi-loop attempts for general software engineering wor
 - **Test hardening**: prefer behavior assertions over implementation details. Do not mock owned code unless the seam is explicitly external.
 - **Refactor**: preserve behavior, keep names and boundaries clearer, and run the same behavior checks before/after when feasible.
 - **Docs/config/package work**: verify install/load/runtime paths, not just prose. Include manifest or smoke evidence when packaging changes.
-- **ACE integration work**: keep `/ace` command registration, prompt context, daemon launch, logs, and promotion as separate responsibilities.
+- **ACE integration work**: treat the external adapter as optional; verify compatible storage context, event-based daemon launch when a listener exists, logs, and explicit candidate promotion separately.
 
 ## Evidence checklist
 
-A strong scored attempt includes:
+A strong scored attempt leaves this evidence in normal tool results for the scorer to inspect:
 
 - Requirement status with direct evidence.
 - Artifact paths and why each changed.
@@ -30,6 +30,8 @@ A strong scored attempt includes:
 - Automated gate evidence for executable changes, or an explicit reason when only local checks exist.
 - Operability notes for logs, metadata, paths, daemon/background processes, and recovery.
 - Risks and unfinished work carried into the next attempt instead of hidden.
+
+`loop_feedback` records the compact checkpoint; it does not accept arbitrary artifact, command, gate, or risk objects.
 
 ## Anti-patterns
 
