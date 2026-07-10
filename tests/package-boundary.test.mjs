@@ -24,7 +24,7 @@ test("pi-loop packages one runtime with intelligent Goal, Plan, scheduler, scori
 
 test("package description and version reflect Loop, Goal, and Plan ownership", () => {
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(manifest.version, "0.3.1");
+  assert.equal(manifest.version, "0.3.2");
   assert.match(manifest.description, /intelligent/i);
   assert.match(manifest.description, /scheduled/i);
   assert.match(manifest.description, /goals/i);
