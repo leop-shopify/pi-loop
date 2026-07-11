@@ -33,14 +33,11 @@ test("saved plans can be refined, executed once, or converted to a goal", () => 
 	assert.match(source, /activateGoal\(ctx, plan\.prompt, goalContractFromPlan\(plan\), goalTasksFromPlan\(plan\)\)/);
 });
 
-test("rich prompt advisor handles choices internally without injected slash commands", () => {
-	assert.match(source, /pi\.on\("input"/);
-	assert.match(source, /shouldSuggestMode/);
-	assert.match(source, /Draft a goal contract/);
-	assert.match(source, /Plan first/);
-	assert.match(source, /Continue normally/);
-	assert.match(source, /Do not ask again this session/);
-	assert.doesNotMatch(source, /sendUserMessage\(["'`]\/(?:goal|plan)/);
+test("ordinary prompts are never intercepted to suggest Plan or Goal mode", () => {
+	assert.doesNotMatch(source, /pi\.on\("input"/);
+	assert.doesNotMatch(source, /This request may benefit from a work mode/);
+	assert.doesNotMatch(source, /Draft a goal contract/);
+	assert.doesNotMatch(source, /Do not ask again this session/);
 });
 
 test("pi-loop installs Plan with internal intelligent Goal activation", () => {

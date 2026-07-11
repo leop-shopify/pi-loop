@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { shouldSuggestMode } from "./intent-advisor.ts";
 import { isReadOnlyPlanTool } from "./plan-safety.ts";
 import {
 	createPlan,
@@ -27,7 +26,6 @@ type PersistedPlanState = {
 	planning: boolean;
 	plan: PlanDocument | null;
 	sourcePrompt: string;
-	advisorEnabled: boolean;
 	toolsBeforePlan: string[] | null;
 };
 
@@ -35,7 +33,6 @@ export function registerPlanRuntime(pi: ExtensionAPI, options: PlanRuntimeOption
 	let planning = false;
 	let plan: PlanDocument | null = null;
 	let sourcePrompt = "";
-	let advisorEnabled = true;
 	let toolsBeforePlan: string[] | null = null;
 
 	function syncPlanTools(): void {
@@ -59,7 +56,7 @@ export function registerPlanRuntime(pi: ExtensionAPI, options: PlanRuntimeOption
 	}
 
 	function persist(): void {
-		pi.appendEntry(PLAN_STATE_TYPE, { planning, plan, sourcePrompt, advisorEnabled, toolsBeforePlan });
+		pi.appendEntry(PLAN_STATE_TYPE, { planning, plan, sourcePrompt, toolsBeforePlan });
 	}
 
 	function planningPrompt(prompt: string): string {
@@ -80,16 +77,6 @@ export function registerPlanRuntime(pi: ExtensionAPI, options: PlanRuntimeOption
 		return true;
 	}
 
-	function startGoalDraft(prompt: string): void {
-		pi.sendMessage(
-			{
-				customType: "pi-goal-draft",
-				content: `Turn the request below into a durable goal contract. Do not start implementation yet. Derive an outcome, verification surfaces, constraints, boundaries, acceptance criteria, an iteration policy, and an honest blocked stop condition. Call create_goal with those structured fields only when the contract is self-contained; ask the user if material information is missing.\n\n<goal_request>\n${prompt}\n</goal_request>`,
-				display: true,
-			},
-			{ triggerTurn: true },
-		);
-	}
 
 	pi.registerTool({
 		name: "get_plan",
@@ -174,35 +161,6 @@ export function registerPlanRuntime(pi: ExtensionAPI, options: PlanRuntimeOption
 		}
 	});
 
-	pi.on("input", async (event, ctx) => {
-		const eligible = shouldSuggestMode({
-			text: event.text,
-			source: event.source,
-			hasUI: ctx.hasUI,
-			imageCount: event.images?.length ?? 0,
-			busy: planning || options.autonomyBusy(),
-			enabled: advisorEnabled,
-		});
-		if (!eligible) return { action: "continue" };
-		const choice = await ctx.ui.select("This request may benefit from a work mode", [
-			"Draft a goal contract",
-			"Plan first",
-			"Continue normally",
-			"Do not ask again this session",
-		]);
-		if (choice === "Draft a goal contract") {
-			startGoalDraft(event.text);
-			return { action: "handled" };
-		}
-		if (choice === "Plan first") {
-			return startPlan(ctx, event.text) ? { action: "handled" } : { action: "continue" };
-		}
-		if (choice === "Do not ask again this session") {
-			advisorEnabled = false;
-			persist();
-		}
-		return { action: "continue" };
-	});
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!planning || !plan) return;
@@ -253,7 +211,6 @@ export function registerPlanRuntime(pi: ExtensionAPI, options: PlanRuntimeOption
 		planning = entry?.data?.planning ?? false;
 		plan = entry?.data?.plan ?? null;
 		sourcePrompt = entry?.data?.sourcePrompt ?? "";
-		advisorEnabled = entry?.data?.advisorEnabled ?? true;
 		toolsBeforePlan = entry?.data?.toolsBeforePlan ?? null;
 		if (planning && options.autonomyBusy()) {
 			planning = false;

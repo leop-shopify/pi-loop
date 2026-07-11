@@ -26,7 +26,7 @@ test("pi-loop packages one native runtime without adapter dependencies or assets
 
 test("package description and version reflect Loop, Goal, and Plan ownership", () => {
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(manifest.version, "1.0.0");
+  assert.equal(manifest.version, "1.0.1");
   assert.match(manifest.description, /intelligent/i);
   assert.match(manifest.description, /scheduled/i);
   assert.match(manifest.description, /goals/i);

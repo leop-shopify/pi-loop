@@ -196,7 +196,6 @@ test("Plan restore stays read-only and branch navigation restores prior tools", 
       planning: true,
       plan: null,
       sourcePrompt: "plan the migration",
-      advisorEnabled: true,
       toolsBeforePlan: ["read", "edit", "create_goal"],
     },
   };
@@ -221,7 +220,6 @@ test("restored Plan yields when an intelligent Goal already owns autonomy", asyn
       planning: true,
       plan: null,
       sourcePrompt: "plan a conflicting change",
-      advisorEnabled: true,
       toolsBeforePlan: ["read", "edit", "create_goal"],
     },
   };

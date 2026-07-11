@@ -1,6 +1,6 @@
 {
   "name": "pi-loop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Intelligent goals, scheduled loops, and structured planning for Pi.",
   "keywords": [
@@ -36,7 +36,7 @@
     "package.json"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.mjs tests/intent-advisor.test.cjs tests/plan-runtime.test.cjs tests/plan-safety.test.cjs tests/plan-state.test.cjs",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs tests/plan-runtime.test.cjs tests/plan-safety.test.cjs tests/plan-state.test.cjs",
     "typecheck": "tsc --noEmit",
     "check": "pnpm test && pnpm typecheck",
     "smoke": "node tests/smoke-pi-extension.mjs",
