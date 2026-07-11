@@ -122,6 +122,10 @@ export interface LoopRuntimeState {
   lastAgentStartScoreCount: number;
   unscoredConsecutiveTurns: number;
   pendingFeedbackTurn: LoopPendingFeedbackTurn | null;
+  delegationPending: boolean;
+  delegationExpectedReports: number;
+  delegationReportsReceived: number;
+  delegationObservedActive: boolean;
   pendingResumeTimer: ReturnType<typeof setTimeout> | null;
   pausedMs: number;
   timerPausedAt: number | null;
@@ -166,6 +170,10 @@ export function createLoopState(): LoopRuntimeState {
     lastAgentStartScoreCount: 0,
     unscoredConsecutiveTurns: 0,
     pendingFeedbackTurn: null,
+    delegationPending: false,
+    delegationExpectedReports: 0,
+    delegationReportsReceived: 0,
+    delegationObservedActive: false,
     pendingResumeTimer: null,
     pausedMs: 0,
     timerPausedAt: null,

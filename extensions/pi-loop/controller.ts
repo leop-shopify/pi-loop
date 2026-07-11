@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { probeChildAgentLifecycle, childAgentsPending } from "./child-agent-lifecycle.ts";
 import { RESUME_DELAY_MS } from "./constants.ts";
 import { finalLoopSummary } from "./final-summary.ts";
 import { appendLogEntry } from "./log.ts";
@@ -73,7 +74,9 @@ export function createLoopController(pi: ExtensionAPI, store: RuntimeStore, scor
       updateLoopWidget(ctx, state);
       state.pendingResumeTimer = setTimeout(() => {
         state.pendingResumeTimer = null;
-        if (!state.active) return;
+        if (!state.active || state.delegationPending) return;
+        const lifecycleSnapshot = probeChildAgentLifecycle(pi, sessionKey(ctx));
+        if (lifecycleSnapshot && childAgentsPending(lifecycleSnapshot)) return;
         if (ctx.isIdle() && !ctx.hasPendingMessages()) pi.sendUserMessage(message);
         else pi.sendUserMessage(message, { deliverAs: "followUp" });
       }, RESUME_DELAY_MS);

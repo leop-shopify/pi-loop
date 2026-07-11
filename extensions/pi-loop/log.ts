@@ -92,6 +92,10 @@ function applyEventEntry(state: LoopRuntimeState, entry: LoopEventEntry): void {
   if (entry.event === "turn_started") {
     resumeLoopTimer(state, entry.timestamp);
     state.pendingFeedbackTurn = null;
+    state.delegationPending = false;
+    state.delegationExpectedReports = 0;
+    state.delegationReportsReceived = 0;
+    state.delegationObservedActive = false;
     recordObservedTurn(state, entry.run ?? state.currentRun, entry.turn ?? state.turnsStarted + 1, entry.globalTurn ?? entry.turn ?? state.totalTurnsStarted + 1);
     return;
   }
@@ -107,8 +111,18 @@ function applyEventEntry(state: LoopRuntimeState, entry: LoopEventEntry): void {
     };
   }
   if (entry.event === "delegation_pending") {
+    const expectedReports = typeof entry.details?.expectedReports === "number"
+      ? entry.details.expectedReports
+      : typeof entry.details?.spawnedCount === "number" ? entry.details.spawnedCount : 0;
     state.unscoredConsecutiveTurns = 0;
     state.pendingFeedbackTurn = null;
+    state.delegationPending = true;
+    state.delegationExpectedReports = expectedReports;
+    state.delegationReportsReceived = 0;
+    const lifecycle = entry.details?.lifecycleSnapshot;
+    state.delegationObservedActive = Boolean(lifecycle && typeof lifecycle === "object"
+      && (("running" in lifecycle && typeof lifecycle.running === "number" && lifecycle.running > 0)
+        || ("queued" in lifecycle && typeof lifecycle.queued === "number" && lifecycle.queued > 0)));
   }
   if (entry.event === "premature_stop") state.prematureStopCount++;
   if (entry.event === "stopped" || entry.event === "cleared" || entry.event === "limit_reached") state.stopReason = entry.reason ?? entry.event;

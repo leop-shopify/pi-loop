@@ -31,7 +31,7 @@ test("pi-loop packages only Goal and Loop runtime assets", () => {
 
 test("package description and version reflect Goal and Loop ownership", () => {
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(manifest.version, "1.0.3");
+  assert.equal(manifest.version, "1.0.4");
   assert.match(manifest.description, /intelligent/i);
   assert.match(manifest.description, /scheduled/i);
   assert.match(manifest.description, /goals/i);

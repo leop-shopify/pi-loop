@@ -8,8 +8,10 @@ import { test } from "node:test";
 
 import piLoopExtension from "../extensions/pi-loop/intelligent-goal.ts";
 import { RESUME_DELAY_MS } from "../extensions/pi-loop/constants.ts";
+import { createLoopController } from "../extensions/pi-loop/controller.ts";
 import { registerLoopEvents } from "../extensions/pi-loop/events.ts";
 import { appendLogEntry, deleteLog, readLogEntries } from "../extensions/pi-loop/log.ts";
+import { createRuntimeStore } from "../extensions/pi-loop/runtime-store.ts";
 
 async function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), "pi-loop-e2e-"));
@@ -172,7 +174,6 @@ test("spawn-only turns wait for agent reports instead of forcing a missing-score
     assert.equal(state.unscoredConsecutiveTurns, 0);
     assert.match(state.currentPrompt, /spawn-only turn is not scoreable progress/);
     assert.deepEqual(pi.stepMessages.map((message) => message.content), [
-      "Step: review loop — loop 1, acceptance turn 1, total 1",
       "Step: delegation pending — spawned agents are running or queued; waiting for focused reports before feedback",
     ]);
     assert.equal(readLogEntries(dir).find((entry) => entry.event === "delegation_pending")?.event, "delegation_pending");
@@ -202,12 +203,182 @@ test("running or queued child agents defer both scored and unscored Goal continu
 
       assert.equal(scheduled.length, 0);
       assert.equal(state.unscoredConsecutiveTurns, 0);
+      assert.equal(typeof state.timerPausedAt, "number");
       assert.match(state.currentPrompt, /spawn-only turn is not scoreable progress/);
     }
   });
 });
 
-test("a responding lifecycle provider suppresses static spawn fallback when no child agents remain", async () => {
+test("agent wakeups while child agents are active do not consume loop turns", async () => {
+  await withTempDir(async (dir) => {
+    const pi = mockPi();
+    let running = 1;
+    pi.events.emit = (name, payload) => {
+      if (name === "pi-extended-teams:child-agent-lifecycle-probe") {
+        payload.respond({ sessionId: "test-session", running, queued: 0 });
+      }
+    };
+    const state = loopState({ timerPausedAt: Date.now() - 100 });
+    const controller = {
+      sessionKey: () => "test-session",
+      getState: () => state,
+      cancelPendingResume: () => {},
+    };
+
+    registerLoopEvents(pi, controller);
+    await pi.events.get("agent_start")({}, mockContext(dir));
+
+    assert.equal(state.turnsStarted, 1);
+    assert.equal(state.totalTurnsStarted, 1);
+    assert.notEqual(state.timerPausedAt, null);
+    assert.deepEqual(pi.stepMessages, []);
+
+    running = 0;
+    await pi.events.get("agent_start")({}, mockContext(dir));
+
+    assert.equal(state.turnsStarted, 2);
+    assert.equal(state.totalTurnsStarted, 2);
+    assert.equal(state.timerPausedAt, null);
+    assert.equal(pi.stepMessages.length, 1);
+  });
+});
+
+test("resume dispatch rechecks delegation lifecycle immediately before sending", async () => {
+  await withTempDir(async (dir) => {
+    const pi = mockPi();
+    let running = 1;
+    pi.events.emit = (name, payload) => {
+      if (name === "pi-extended-teams:child-agent-lifecycle-probe") {
+        payload.respond({ sessionId: "test-session", running, queued: 0 });
+      }
+    };
+    const controller = createLoopController(pi, createRuntimeStore(), "loop_feedback");
+    const ctx = mockContext(dir);
+    const state = controller.getState(ctx);
+    state.active = true;
+
+    controller.scheduleResume(ctx, state, "continue once idle");
+    await sleep(RESUME_DELAY_MS + 20);
+    assert.equal(pi.sentMessages.length, 0);
+
+    running = 0;
+    state.delegationPending = true;
+    controller.scheduleResume(ctx, state, "still latched");
+    await sleep(RESUME_DELAY_MS + 20);
+    assert.equal(pi.sentMessages.length, 0);
+
+    state.delegationPending = false;
+    controller.scheduleResume(ctx, state, "continue once idle");
+    await sleep(RESUME_DELAY_MS + 20);
+    assert.equal(pi.sentMessages.length, 1);
+    assert.equal(pi.sentMessages[0].text, "continue once idle");
+  });
+});
+
+test("spawn registration stays pending through zero and missing lifecycle snapshots until a terminal report", async () => {
+  await withTempDir(async (dir) => {
+    for (const lifecycle of ["zero", "missing"]) {
+      const pi = mockPi();
+      if (lifecycle === "zero") {
+        pi.events.emit = (name, payload) => {
+          if (name === "pi-extended-teams:child-agent-lifecycle-probe") {
+            payload.respond({ sessionId: "test-session", running: 0, queued: 0 });
+          }
+        };
+      }
+      const state = loopState();
+      const controller = {
+        sessionKey: () => "test-session",
+        getState: () => state,
+        cancelPendingResume: () => {},
+      };
+      registerLoopEvents(pi, controller);
+
+      await pi.events.get("tool_execution_start")({
+        toolCallId: `spawn-${lifecycle}`,
+        toolName: "spawn_agent",
+        args: { name: "reader" },
+      }, mockContext(dir));
+      await pi.events.get("agent_start")({}, mockContext(dir));
+
+      assert.equal(state.delegationPending, true);
+      assert.equal(state.turnsStarted, 1);
+      assert.equal(state.totalTurnsStarted, 1);
+
+      pi.events.emitCustom("pi-extended-teams:agent-report", { name: "reader" });
+      await pi.events.get("agent_start")({}, mockContext(dir));
+
+      assert.equal(state.delegationPending, false);
+      assert.equal(state.turnsStarted, 2);
+      assert.equal(state.totalTurnsStarted, 2);
+    }
+  });
+});
+
+test("a swarm resumes exactly once after every expected report and final idle", async () => {
+  await withTempDir(async (dir) => {
+    const pi = mockPi();
+    let running = 0;
+    pi.events.emit = (name, payload) => {
+      if (name === "pi-extended-teams:child-agent-lifecycle-probe") {
+        payload.respond({ sessionId: "test-session", running, queued: 0 });
+      }
+    };
+    const state = loopState();
+    const controller = {
+      sessionKey: () => "test-session",
+      getState: () => state,
+      cancelPendingResume: () => {},
+    };
+    registerLoopEvents(pi, controller);
+
+    await pi.events.get("tool_execution_start")({
+      toolCallId: "spawn-swarm",
+      toolName: "spawn_swarm_agents",
+      args: { agents: [{ name: "one" }, { name: "two" }] },
+    }, mockContext(dir));
+
+    running = 1;
+    pi.events.emitCustom("pi-extended-teams:agent-report", { name: "one" });
+    await pi.events.get("agent_start")({}, mockContext(dir));
+    assert.equal(state.turnsStarted, 1);
+    assert.equal(state.delegationPending, true);
+
+    running = 0;
+    pi.events.emitCustom("pi-extended-teams:agent-report", { name: "two" });
+    await pi.events.get("agent_start")({}, mockContext(dir));
+    assert.equal(state.turnsStarted, 2);
+    assert.equal(state.delegationPending, false);
+  });
+});
+
+test("repeated active-agent wakeups keep one delegation-pending history step", async () => {
+  await withTempDir(async (dir) => {
+    const pi = mockPi();
+    pi.events.emit = (name, payload) => {
+      if (name === "pi-extended-teams:child-agent-lifecycle-probe") {
+        payload.respond({ sessionId: "test-session", running: 1, queued: 0 });
+      }
+    };
+    const state = loopState();
+    const controller = {
+      sessionKey: () => "test-session",
+      getState: () => state,
+      enforceLimits: () => false,
+      scheduleResume: () => {},
+    };
+
+    registerLoopEvents(pi, controller);
+    await pi.events.get("agent_end")({ messages: [] }, mockContext(dir));
+    await pi.events.get("agent_end")({ messages: [] }, mockContext(dir));
+
+    assert.equal(state.stepHistory.filter((entry) => entry.step === "delegation pending").length, 1);
+    assert.equal(readLogEntries(dir).filter((entry) => entry.event === "delegation_pending").length, 1);
+    assert.equal(pi.stepMessages.length, 1);
+  });
+});
+
+test("a zero lifecycle snapshot after spawn remains pending until the agent reports", async () => {
   await withTempDir(async (dir) => {
     const pi = mockPi();
     pi.events.emit = (name, payload) => {
@@ -229,8 +400,9 @@ test("a responding lifecycle provider suppresses static spawn fallback when no c
       messages: [{ role: "assistant", content: [{ type: "toolCall", name: "spawn_agent" }] }],
     }, mockContext(dir));
 
-    assert.equal(scheduled.length, 1);
-    assert.equal(readLogEntries(dir).some((entry) => entry.event === "delegation_pending"), false);
+    assert.equal(scheduled.length, 0);
+    assert.equal(state.delegationPending, true);
+    assert.equal(readLogEntries(dir).some((entry) => entry.event === "delegation_pending"), true);
   });
 });
 
@@ -482,6 +654,10 @@ function loopState(overrides = {}) {
     lastAgentStartScoreCount: 0,
     unscoredConsecutiveTurns: 0,
     pendingFeedbackTurn: null,
+    delegationPending: false,
+    delegationExpectedReports: 0,
+    delegationReportsReceived: 0,
+    delegationObservedActive: false,
     pendingResumeTimer: null,
     pausedMs: 0,
     timerPausedAt: null,
@@ -583,10 +759,23 @@ function recordBashCheck(ctx, command, text, exitCode = 0) {
 }
 
 function mockPi() {
+  const events = new Map();
+  const customHandlers = new Map();
+  events.on = (name, handler) => {
+    const handlers = customHandlers.get(name) ?? [];
+    customHandlers.set(name, [...handlers, handler]);
+    return () => customHandlers.set(name, (customHandlers.get(name) ?? []).filter((candidate) => candidate !== handler));
+  };
+  events.emit = (name, payload) => {
+    for (const handler of customHandlers.get(name) ?? []) handler(payload);
+  };
+  events.emitCustom = (name, payload) => {
+    for (const handler of customHandlers.get(name) ?? []) handler(payload);
+  };
   return {
     commands: new Map(),
     tools: new Map(),
-    events: new Map(),
+    events,
     activeTools: [],
     sentMessages: [],
     stepMessages: [],
