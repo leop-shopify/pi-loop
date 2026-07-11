@@ -1,6 +1,6 @@
 {
   "name": "pi-loop",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "description": "Intelligent goals and scheduled loops for Pi.",
   "keywords": [
