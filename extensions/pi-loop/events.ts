@@ -1,6 +1,7 @@
 import type { AgentEndEvent, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { createAgentEndGate, type AgentEndGate } from "./agent-end-gate.ts";
+import { childAgentsPending, probeChildAgentLifecycle } from "./child-agent-lifecycle.ts";
 import { MAX_UNSCORED_REMINDERS } from "./constants.ts";
 import type { LoopController } from "./controller.ts";
 import { appendLogEntry, reconstructLoopState } from "./log.ts";
@@ -74,18 +75,21 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController,
     if (controller.enforceLimits(ctx, state)) return;
 
     const claimedCompletion = hasCompletionClaim(assistantTextFromEvent(event));
-    const scoredThisTurn = state.results.length > state.lastAgentStartScoreCount;
-    const spawnedAgentsThisTurn = turnSpawnedAgents(event);
-    if (!scoredThisTurn) {
-      if (spawnedAgentsThisTurn) {
-        state.unscoredConsecutiveTurns = 0;
-        state.currentPrompt = delegationPendingPrompt(state);
-        appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "delegation_pending", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, reason: "spawned agents are running; waiting for focused reports before feedback", details: { claimedCompletion } });
-        updateLoopWidget(ctx, state);
-        sendLoopStepMessage(pi, state, "delegation pending", "spawned agents are running; waiting for focused reports before feedback", ctx.cwd);
-        return;
-      }
+    const lifecycleSnapshot = probeChildAgentLifecycle(pi, controller.sessionKey(ctx));
+    const delegationPending = lifecycleSnapshot
+      ? childAgentsPending(lifecycleSnapshot)
+      : turnSpawnedAgents(event);
+    if (delegationPending) {
+      state.unscoredConsecutiveTurns = 0;
+      state.currentPrompt = delegationPendingPrompt(state);
+      appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "delegation_pending", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, reason: "spawned agents are running or queued; waiting for focused reports before feedback", details: { claimedCompletion, lifecycleSnapshot } });
+      updateLoopWidget(ctx, state);
+      sendLoopStepMessage(pi, state, "delegation pending", "spawned agents are running or queued; waiting for focused reports before feedback", ctx.cwd);
+      return;
+    }
 
+    const scoredThisTurn = state.results.length > state.lastAgentStartScoreCount;
+    if (!scoredThisTurn) {
       state.unscoredConsecutiveTurns++;
       if (!acceptanceReady(state)) {
         state.unscoredConsecutiveTurns = 0;

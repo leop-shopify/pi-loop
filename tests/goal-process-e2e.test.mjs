@@ -153,6 +153,7 @@ test("spawn-only turns wait for agent reports instead of forcing a missing-score
     const state = loopState({ results: [], unscoredConsecutiveTurns: 1 });
     const scheduled = [];
     const controller = {
+      sessionKey: () => "test-session",
       getState: () => state,
       enforceLimits: () => false,
       scheduleResume: (_ctx, _state, message) => scheduled.push(message),
@@ -172,9 +173,64 @@ test("spawn-only turns wait for agent reports instead of forcing a missing-score
     assert.match(state.currentPrompt, /spawn-only turn is not scoreable progress/);
     assert.deepEqual(pi.stepMessages.map((message) => message.content), [
       "Step: review loop — loop 1, acceptance turn 1, total 1",
-      "Step: delegation pending — spawned agents are running; waiting for focused reports before feedback",
+      "Step: delegation pending — spawned agents are running or queued; waiting for focused reports before feedback",
     ]);
     assert.equal(readLogEntries(dir).find((entry) => entry.event === "delegation_pending")?.event, "delegation_pending");
+  });
+});
+
+test("running or queued child agents defer both scored and unscored Goal continuation", async () => {
+  await withTempDir(async (dir) => {
+    for (const results of [[], [{ score: 50 }]]) {
+      const pi = mockPi();
+      pi.events.emit = (name, payload) => {
+        if (name === "pi-extended-teams:child-agent-lifecycle-probe") {
+          payload.respond({ sessionId: "test-session", running: results.length, queued: results.length ? 0 : 1 });
+        }
+      };
+      const state = loopState({ results, lastAgentStartScoreCount: 0 });
+      const scheduled = [];
+      const controller = {
+        sessionKey: () => "test-session",
+        getState: () => state,
+        enforceLimits: () => false,
+        scheduleResume: (_ctx, _state, message) => scheduled.push(message),
+      };
+
+      registerLoopEvents(pi, controller);
+      await pi.events.get("agent_end")({ messages: [] }, mockContext(dir));
+
+      assert.equal(scheduled.length, 0);
+      assert.equal(state.unscoredConsecutiveTurns, 0);
+      assert.match(state.currentPrompt, /spawn-only turn is not scoreable progress/);
+    }
+  });
+});
+
+test("a responding lifecycle provider suppresses static spawn fallback when no child agents remain", async () => {
+  await withTempDir(async (dir) => {
+    const pi = mockPi();
+    pi.events.emit = (name, payload) => {
+      if (name === "pi-extended-teams:child-agent-lifecycle-probe") {
+        payload.respond({ sessionId: "test-session", running: 0, queued: 0 });
+      }
+    };
+    const state = loopState();
+    const scheduled = [];
+    const controller = {
+      sessionKey: () => "test-session",
+      getState: () => state,
+      enforceLimits: () => false,
+      scheduleResume: (_ctx, _state, message) => scheduled.push(message),
+    };
+
+    registerLoopEvents(pi, controller);
+    await pi.events.get("agent_end")({
+      messages: [{ role: "assistant", content: [{ type: "toolCall", name: "spawn_agent" }] }],
+    }, mockContext(dir));
+
+    assert.equal(scheduled.length, 1);
+    assert.equal(readLogEntries(dir).some((entry) => entry.event === "delegation_pending"), false);
   });
 });
 
