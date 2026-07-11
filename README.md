@@ -1,14 +1,13 @@
 # pi-loop
 
-`pi-loop` is one Pi package for three work modes:
+`pi-loop` is one Pi package for two work modes:
 
 | Mode | Driver | Command |
 | --- | --- | --- |
 | Goal | Bounded intelligent iteration and evidence feedback | `/goal <objective>` |
 | Loop | Time | `/loop <interval> <prompt>` |
-| Plan | Read-only exploration and milestones | `/plan <request>` |
 
-The modes share one runtime and arbitrate ownership internally. A scheduled run cannot start while Goal or Plan is active, and Goal or Plan cannot start while a scheduled run is executing.
+The modes share one runtime and coordinate ownership internally. A scheduled run cannot start while Goal is active, and Goal cannot start while a scheduled run is executing.
 
 ## Install
 
@@ -114,7 +113,7 @@ Each scheduled task:
 - runs between agent turns
 - never overlaps another scheduled run
 - retains running ownership through provider retries and task expiry
-- waits while Goal or Plan owns autonomy
+- waits while Goal owns autonomy
 - coalesces missed intervals into one pending run
 - restores and re-arms when the session starts or the conversation branch changes
 - records up to 20 completed, failed, or cancelled runs
@@ -122,47 +121,11 @@ Each scheduled task:
 
 A late task does not replay every missed interval. It runs once and schedules the next future occurrence.
 
-## Planning
-
-Start read-only exploration with:
-
-```text
-/plan <request>
-/plan status
-/plan clear
-```
-
-Plan mode activates an explicit read-only tool allowlist and removes Bash, edit, write, Goal feedback, and unknown custom tools. The agent calls `save_plan` with a self-contained living plan containing:
-
-- context and orientation
-- constraints and boundaries
-- acceptance criteria
-- independently verifiable milestones
-- steps and verification commands per milestone
-- risks and decisions
-
-When the plan is ready, choose:
-
-- Turn plan into a Goal
-- Execute once
-- Refine plan
-- Keep plan
-
-Turning a Plan into a Goal starts the intelligent engine with the Plan outcome, verification, constraints, boundaries, acceptance criteria, milestones, iteration policy, and blocked stop condition embedded in the objective.
-
-## Rich-prompt advisor
-
-For an interactive, multi-part prompt without an explicit mode instruction, pi-loop may offer to draft a Goal contract, Plan first, continue normally, or stop asking for the session.
-
-The advisor uses deterministic prompt-shape signals. It skips extension messages, steering and queued follow-ups, slash commands, shell input, explicit Goal/Plan/Loop or scheduling requests, short prompts, no-UI sessions, and sessions where a work mode is already active.
-
 ## Tools
 
 - `create_goal`: starts the intelligent Goal engine only when Goal mode was explicitly requested
 - `get_goal`: returns a non-circular Goal and progress summary
 - `loop_feedback`: records score-guided evidence and attempt feedback while Goal mode is active
-- `get_plan`: reads the saved structured Plan
-- `save_plan`: saves the result of read-only Plan exploration
 
 ## Persistence
 
@@ -172,7 +135,7 @@ Intelligent Goal history uses the original project-keyed JSONL log under:
 ~/.pi/agent/pi-loop/projects/<project-key>/log.jsonl
 ```
 
-Entries retain the original config, score, event, session, run, turn, evidence, and step-history contracts. Scheduled task state uses Pi custom session entries with `customType: "pi-loop-schedule"`. Plan state uses `customType: "pi-plan"`.
+Entries retain the original config, score, event, session, run, turn, evidence, and step-history contracts. Scheduled task state uses Pi custom session entries with `customType: "pi-loop-schedule"`.
 
 There is no background daemon. Scheduled work that must run while Pi or the computer is closed requires an external scheduler or durable automation service.
 
@@ -199,7 +162,7 @@ The intelligent engine, floating panel, scoring, confirmation, history, and boun
 ## Architecture
 
 ```text
-extensions/pi-loop/index.ts                     unified lifecycle and work arbitration
+extensions/pi-loop/index.ts                     unified lifecycle and work coordination
 extensions/pi-loop/intelligent-goal.ts          intelligent Goal registration and model tools
 extensions/pi-loop/loop-command.ts               Goal command and floating-panel controls
 extensions/pi-loop/controller.ts                 Goal continuation, limits, and completion summary
@@ -212,7 +175,6 @@ extensions/pi-loop/floating-panel.ts             generic overlay implementation
 extensions/pi-loop/ui.ts                         intelligent Goal panel rendering
 extensions/pi-loop/schedule-*.ts                 scheduled task parsing and state
 extensions/pi-loop/scheduler.ts                  timers, persistence, and coalescing
-extensions/pi-loop/plan/                         Plan state, safety, advisor, and runtime
 ```
 
 ## Development
@@ -226,7 +188,6 @@ pnpm pack:dry
 ## Design sources
 
 - [Codex: Follow a goal](https://developers.openai.com/codex/use-cases/follow-goals)
-- [Codex: Using PLANS.md for multi-hour problem solving](https://developers.openai.com/cookbook/articles/codex_exec_plans)
 - [Codex automations](https://developers.openai.com/codex/app/automations)
 - [Claude Code goals](https://code.claude.com/docs/en/goal)
 - [Claude Code best practices](https://code.claude.com/docs/en/best-practices)

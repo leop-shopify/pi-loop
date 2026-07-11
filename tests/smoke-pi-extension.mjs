@@ -9,7 +9,7 @@ if (!piBin) {
   process.exit(1);
 }
 
-for (const prompt of ["/loop status", "/goal status", "/plan status"]) {
+for (const prompt of ["/loop status", "/goal status"]) {
   const result = spawnSync(piBin, [
     "--mode",
     "json",

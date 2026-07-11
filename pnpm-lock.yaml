@@ -24,9 +24,6 @@ importers:
       '@types/node':
         specifier: 22.15.30
         version: 22.15.30
-      jiti:
-        specifier: ^2.7.0
-        version: 2.7.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

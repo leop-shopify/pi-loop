@@ -1,7 +1,7 @@
 export const WORK_MODE_PROBE = "pi-work-mode:probe";
 export const WORK_MODE_CAPABILITY_PROBE = "pi-work-mode:capability-probe";
 
-export type WorkMode = "goal" | "plan" | "scheduled_run";
+export type WorkMode = "goal" | "scheduled_run";
 
 export type WorkModeState = {
   owner: string;

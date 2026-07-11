@@ -19,7 +19,10 @@ test("/loop creates and manages a scheduled session task", async () => {
   await pi.commands.get("loop").handler("5m check whether CI passed", ctx);
 
   assert.equal(pi.commands.has("pi-loop"), true);
-  assert.deepEqual([...pi.tools.keys()].sort(), ["create_goal", "get_goal", "get_plan", "loop_feedback", "save_plan"]);
+  assert.deepEqual([...pi.tools.keys()].sort(), ["create_goal", "get_goal", "loop_feedback"]);
+  assert.equal(pi.commands.has("plan"), false);
+  assert.equal(pi.tools.has("get_plan"), false);
+  assert.equal(pi.tools.has("save_plan"), false);
   assert.equal(pi.shortcuts.size, 1);
   const task = latestState(pi).tasks[0];
   assert.equal(task.prompt, "check whether CI passed");
@@ -56,7 +59,7 @@ test("run now dispatches one bounded scheduled prompt and records history", asyn
   assert.equal(completed.history.length, 1);
 });
 
-test("Loop, Goal, and Plan arbitrate autonomous ownership inside one package", async () => {
+test("Loop and Goal arbitrate autonomous ownership inside one package", async () => {
   const pi = mockPi();
   const ctx = mockContext(pi);
   piLoopExtension(pi);
@@ -64,7 +67,9 @@ test("Loop, Goal, and Plan arbitrate autonomous ownership inside one package", a
 
   assert.equal(pi.commands.has("loop"), true);
   assert.equal(pi.commands.has("goal"), true);
-  assert.equal(pi.commands.has("plan"), true);
+  assert.equal(pi.commands.has("plan"), false);
+  assert.equal(pi.tools.has("get_plan"), false);
+  assert.equal(pi.tools.has("save_plan"), false);
 
   await pi.commands.get("goal").handler("verify the migration", ctx);
   await pi.commands.get("loop").handler("5m inspect CI", ctx);
@@ -82,8 +87,6 @@ test("Loop, Goal, and Plan arbitrate autonomous ownership inside one package", a
 
   await pi.commands.get("goal").handler("start another goal", ctx);
   assert.match(ctx.notifications.at(-1).message, /Another autonomous mode is active/);
-  await pi.commands.get("plan").handler("plan another change", ctx);
-  assert.match(ctx.notifications.at(-1).message, /scheduled run blocks Plan mode/);
 });
 
 test("provider retries retain Goal and scheduled ownership without double-driving", async () => {
@@ -188,54 +191,6 @@ test("session tree navigation restores the selected branch schedule", async () =
   assert.doesNotMatch(ctx.notifications.at(-1).message, /old branch task/);
 });
 
-test("Plan restore stays read-only and branch navigation restores prior tools", async () => {
-  const planEntry = {
-    type: "custom",
-    customType: "pi-plan",
-    data: {
-      planning: true,
-      plan: null,
-      sourcePrompt: "plan the migration",
-      toolsBeforePlan: ["read", "edit", "create_goal"],
-    },
-  };
-  const pi = mockPi();
-  pi.activeTools = ["read", "edit", "create_goal"];
-  const ctx = mockContext(pi, [planEntry]);
-  piLoopExtension(pi);
-
-  await pi.events.get("session_start")({}, ctx);
-  assert.deepEqual(pi.activeTools.sort(), ["read", "save_plan"]);
-
-  ctx.setBranch([{ type: "custom", customType: "unrelated", data: {} }]);
-  await pi.events.get("session_tree")({}, ctx);
-  assert.deepEqual(pi.activeTools.sort(), ["create_goal", "edit", "read"]);
-});
-
-test("restored Plan yields when an intelligent Goal already owns autonomy", async () => {
-  const planEntry = {
-    type: "custom",
-    customType: "pi-plan",
-    data: {
-      planning: true,
-      plan: null,
-      sourcePrompt: "plan a conflicting change",
-      toolsBeforePlan: ["read", "edit", "create_goal"],
-    },
-  };
-  const pi = mockPi();
-  const ctx = mockContext(pi);
-  piLoopExtension(pi);
-  await pi.events.get("session_start")({}, ctx);
-  await pi.commands.get("goal").handler("verify ownership", ctx);
-
-  ctx.setBranch([planEntry]);
-  await pi.events.get("session_tree")({}, ctx);
-  assert.equal(pi.activeTools.includes("loop_feedback"), true);
-  assert.equal(pi.activeTools.includes("save_plan"), false);
-  await pi.commands.get("goal").handler("clear", ctx);
-});
-
 test("Goal stop remains a management command and never becomes a new objective", async () => {
   const pi = mockPi();
   const ctx = mockContext(pi);
@@ -328,7 +283,6 @@ function mockContext(pi, branchEntries = []) {
       setStatus() {},
       setWidget() {},
       confirm: async () => true,
-      select: async () => "Keep plan",
       editor: async () => undefined,
     },
     isIdle: () => true,

@@ -1,8 +1,8 @@
 {
   "name": "pi-loop",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
-  "description": "Intelligent goals, scheduled loops, and structured planning for Pi.",
+  "description": "Intelligent goals and scheduled loops for Pi.",
   "keywords": [
     "pi-package",
     "pi",
@@ -10,7 +10,6 @@
     "scheduled-tasks",
     "recurring-tasks",
     "goals",
-    "planning",
     "software-quality",
     "scoring"
   ],
@@ -29,14 +28,13 @@
   },
   "files": [
     "extensions/pi-loop/*.ts",
-    "extensions/pi-loop/plan",
     "extensions/pi-loop/scoring",
     "skills",
     "README.md",
     "package.json"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.mjs tests/plan-runtime.test.cjs tests/plan-safety.test.cjs tests/plan-state.test.cjs",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "check": "pnpm test && pnpm typecheck",
     "smoke": "node tests/smoke-pi-extension.mjs",
@@ -55,7 +53,6 @@
     "@earendil-works/pi-coding-agent": "0.80.2",
     "@earendil-works/pi-tui": "0.80.2",
     "@types/node": "22.15.30",
-    "jiti": "^2.7.0",
     "typescript": "^5.9.3"
   }
 }

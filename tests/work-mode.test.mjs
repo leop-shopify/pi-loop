@@ -39,8 +39,8 @@ test("work-mode listeners unregister cleanly across extension reloads", () => {
 test("work-mode probes can ignore the caller's own owner", () => {
   const pi = mockPi();
   registerWorkMode(pi, () => ({ owner: "pi-loop", mode: "scheduled_run", active: true }));
-  registerWorkMode(pi, () => ({ owner: "other-extension", mode: "plan", active: true }));
-  assert.deepEqual(probeWorkModes(pi, "pi-loop"), [{ owner: "other-extension", mode: "plan", active: true }]);
+  registerWorkMode(pi, () => ({ owner: "other-extension", mode: "goal", active: true }));
+  assert.deepEqual(probeWorkModes(pi, "pi-loop"), [{ owner: "other-extension", mode: "goal", active: true }]);
 });
 
 function mockPi() {
