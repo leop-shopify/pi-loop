@@ -39,7 +39,7 @@ The catalog at pi.dev lists 17+ Ralph-style packages plus adjacent loop/goal too
 | `@mikefreno/ralpi` | DAG-based task dependency resolution from PRDs |
 | `rezero` | Review-and-retry loop with checkpoint restarts |
 
-pi-loop's differentiators today: deterministic rule-based scoring with hard caps (no LLM judge cost), acceptance-criteria discovery gate with user confirmation, bounded best-of-K runs, ACE playbook integration, and the richest persisted telemetry (per-turn durations, outcomes, verifier findings).
+pi-loop's differentiators today: deterministic rule-based scoring with hard caps (no LLM judge cost), acceptance-criteria discovery gate with user confirmation, bounded best-of-K runs, and rich persisted telemetry (per-turn durations, outcomes, verifier findings).
 
 ## 4. First entry with any model
 

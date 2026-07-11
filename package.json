@@ -1,6 +1,6 @@
 {
   "name": "pi-loop",
-  "version": "0.3.2",
+  "version": "1.0.0",
   "type": "module",
   "description": "Intelligent goals, scheduled loops, and structured planning for Pi.",
   "keywords": [
@@ -28,7 +28,6 @@
     ]
   },
   "files": [
-    "ace",
     "extensions/pi-loop/*.ts",
     "extensions/pi-loop/plan",
     "extensions/pi-loop/scoring",

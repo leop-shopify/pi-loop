@@ -111,7 +111,6 @@ function applyEventEntry(state: LoopRuntimeState, entry: LoopEventEntry): void {
     state.pendingFeedbackTurn = null;
   }
   if (entry.event === "premature_stop") state.prematureStopCount++;
-  if (entry.event === "ace_run_started" || entry.event === "ace_run_completed" || entry.event === "ace_run_failed" || entry.event === "ace_run_skipped") recordAceRun(state, entry);
   if (entry.event === "stopped" || entry.event === "cleared" || entry.event === "limit_reached") state.stopReason = entry.reason ?? entry.event;
 }
 
@@ -127,28 +126,6 @@ function recordLoopStep(state: LoopRuntimeState, entry: LoopEventEntry): void {
     globalTurn: typeof details.globalTurn === "number" ? details.globalTurn : entry.globalTurn ?? entry.turn ?? state.totalTurnsStarted,
     timestamp: typeof details.timestamp === "number" ? details.timestamp : entry.timestamp,
   }];
-}
-
-function recordAceRun(state: LoopRuntimeState, entry: LoopEventEntry): void {
-  const status = entry.event === "ace_run_started" ? "running" : entry.event === "ace_run_completed" ? "completed" : entry.event === "ace_run_failed" ? "failed" : "skipped";
-  const details = entry.details ?? {};
-  const mode = details.mode === "online" || details.mode === "eval_only" ? details.mode : "offline";
-  state.aceRun = {
-    status,
-    mode,
-    startedAt: typeof details.startedAt === "number" ? details.startedAt : entry.timestamp,
-    completedAt: status === "running" ? undefined : entry.timestamp,
-    message: entry.reason,
-    pid: typeof details.pid === "number" ? details.pid : undefined,
-    outputDir: typeof details.outputDir === "string" ? details.outputDir : undefined,
-    metadataPath: typeof details.metadataPath === "string" ? details.metadataPath : undefined,
-    stdoutPath: typeof details.stdoutPath === "string" ? details.stdoutPath : undefined,
-    stderrPath: typeof details.stderrPath === "string" ? details.stderrPath : undefined,
-    candidatePath: typeof details.candidatePath === "string" ? details.candidatePath : undefined,
-    sampleCount: typeof details.sampleCount === "number" ? details.sampleCount : undefined,
-    validationScore: typeof details.validationScore === "number" ? details.validationScore : undefined,
-    code: typeof details.code === "number" ? details.code : undefined,
-  };
 }
 
 function recordObservedTurn(state: LoopRuntimeState, runIndex: number, turn: number, globalTurn: number): void {

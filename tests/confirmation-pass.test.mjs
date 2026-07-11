@@ -69,8 +69,8 @@ test("after a completion claim the continue prompt becomes a confirmation pass",
   assert.match(prompt, /AC1: house renders with walls, roof, door/);
   assert.match(prompt, /try to falsify the claim/);
   assert.match(prompt, /Do not add features, refactors, or new scope/);
-  assert.doesNotMatch(prompt, /Strategy rule: use ACE context/);
   assert.doesNotMatch(prompt, /Continue the pi-loop workflow with a refined prompt/);
+  assert.doesNotMatch(prompt, /choose a genuinely different, verifiable slice after failure or plateau/);
 });
 
 test("later confirmation passes ask for a different falsification angle", () => {
@@ -94,10 +94,10 @@ test("next run after a claim becomes an independent audit run", () => {
   const prompt = nextRunPrompt(claimedState());
   assert.match(prompt, /independent confirmation audit/);
   assert.match(prompt, /re-verify every confirmed acceptance criterion with fresh evidence/);
-  assert.doesNotMatch(prompt, /genuinely different short plan/);
+  assert.doesNotMatch(prompt, /genuinely different, verifiable slice/);
 
   const normal = nextRunPrompt(claimedState([scoreEntry({ attempt: { stopIntent: "continue" } })]));
-  assert.match(normal, /genuinely different short plan/);
+  assert.match(normal, /genuinely different, verifiable slice/);
 });
 
 test("confirmation passes ask for an independent audit lane", () => {

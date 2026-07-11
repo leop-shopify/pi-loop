@@ -56,23 +56,6 @@ export interface LoopPendingFeedbackTurn {
   globalTurn: number;
 }
 
-export interface LoopAceRunState {
-  status: "running" | "completed" | "failed" | "skipped";
-  mode: "offline" | "online" | "eval_only";
-  startedAt: number;
-  completedAt?: number;
-  message?: string;
-  pid?: number;
-  outputDir?: string;
-  metadataPath?: string;
-  stdoutPath?: string;
-  stderrPath?: string;
-  candidatePath?: string;
-  sampleCount?: number;
-  validationScore?: number;
-  code?: number;
-}
-
 export interface LoopScoreEntry {
   type: "score";
   schemaVersion?: 2;
@@ -111,7 +94,7 @@ export interface LoopEventEntry {
   type: "event";
   schemaVersion?: 2;
   timestamp: number;
-  event: "stopped" | "cleared" | "limit_reached" | "resumed" | "run_started" | "run_stopped" | "turn_started" | "missing_score" | "delegation_pending" | "premature_stop" | "ace_run_started" | "ace_run_completed" | "ace_run_failed" | "ace_run_skipped" | "loop_step";
+  event: "stopped" | "cleared" | "limit_reached" | "resumed" | "run_started" | "run_stopped" | "turn_started" | "missing_score" | "delegation_pending" | "premature_stop" | "loop_step";
   reason?: string;
   run?: number;
   turn?: number;
@@ -153,7 +136,6 @@ export interface LoopRuntimeState {
   turnDurations: LoopTurnDuration[];
   contextUsage: LoopContextUsageSnapshot | null;
   stepHistory: LoopStepHistoryEntry[];
-  aceRun: LoopAceRunState | null;
   panelVisible: boolean;
 }
 
@@ -198,7 +180,6 @@ export function createLoopState(): LoopRuntimeState {
     turnDurations: [],
     contextUsage: null,
     stepHistory: [],
-    aceRun: null,
     panelVisible: true,
   };
 }

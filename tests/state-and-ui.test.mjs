@@ -148,6 +148,28 @@ test("legacy acceptance readiness and turn accounting stay open after post-upgra
   assert.equal(normalTurnsStarted(state), 2);
 });
 
+test("state restore ignores legacy ACE run events without constructing adapter state", () => {
+  withTempDir((dir) => {
+    const state = createLoopState();
+    appendLogEntry(dir, startLoopState(state, {
+      goal: "restore a legacy loop",
+      targetScore: 90,
+      maxTurns: 12,
+      maxMinutes: 10,
+      startedAt: Date.now(),
+    }));
+    for (const event of ["ace_run_started", "ace_run_completed", "ace_run_failed", "ace_run_skipped"]) {
+      appendLogEntry(dir, { type: "event", schemaVersion: 2, event, timestamp: Date.now(), details: { mode: "offline", pid: 123 } });
+    }
+
+    const reconstructed = reconstructLoopState(dir);
+
+    assert.equal(reconstructed.goal, "restore a legacy loop");
+    assert.equal(reconstructed.active, true);
+    assert.equal(Object.hasOwn(reconstructed, "aceRun"), false);
+  });
+});
+
 test("state reconstructs historical missing-score turn counters", () => {
   withTempDir((dir) => {
     const state = createLoopState();
@@ -311,6 +333,7 @@ test("loop widget renders a passive side-panel dashboard with data, prompt, and 
   assert.match(text, /tokens:/);
   assert.match(text, /progress:/);
   assert.match(text, /recent:/);
+  assert.doesNotMatch(text, /ace:/i);
   assert.match(text, /Now:/);
   assert.match(text, /improve the dynamic loop interface/);
   assert.doesNotMatch(text, /continue the loop with a concrete plan/);

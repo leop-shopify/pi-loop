@@ -12,4 +12,3 @@ export const MAX_FEEDBACK_HISTORY_CHARS = 2_400;
 export const DETAILED_RECENT_ATTEMPTS = 3;
 export const COMPACT_SCORE_TREND_LIMIT = 20;
 export const FEEDBACK_TOOL_NAME = "loop_feedback";
-export const ACE_LOOP_CONTEXT_CHAR_CAP = 1_800;

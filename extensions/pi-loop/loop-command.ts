@@ -1,8 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
 
-import { buildAceLoopContext } from "./ace-context.ts";
-import { launchAceForLoop } from "./ace-launch.ts";
 import { MAX_TOTAL_TURNS } from "./constants.ts";
 import { goalHelp, parseLoopArgs, statusText } from "./commands.ts";
 import { totalTurnBudgetExceeded } from "./run-manager.ts";
@@ -70,10 +68,8 @@ export function registerGoalCommand(pi: ExtensionAPI, controller: LoopController
     updateLoopWidget(ctx, state);
     sendLoopStepMessage(pi, state, "starting loop", `run ${state.currentRun}/${state.maxRuns}, ${state.maxTurns} attempts max`, ctx.cwd);
     ctx.ui.notify(`pi-goal started: ${parsed.minutes} minutes, ${parsed.turns} turns per run, ${parsed.runs} run(s); first loop_feedback call records the baseline`, "info");
-    const aceContext = await buildAceLoopContext(ctx);
-    launchAceForLoop(pi, ctx as ExtensionCommandContext, state, aceContext);
     sendLoopStepMessage(pi, state, "kickoff prompt", "sent initial loop instructions", ctx.cwd);
-    controller.sendWhenReady(kickoffPrompt(state, { aceContext }), ctx);
+    controller.sendWhenReady(kickoffPrompt(state), ctx);
     return { started: true, reason: "started" };
   };
 
@@ -160,6 +156,5 @@ function clearLoop(state: Parameters<typeof stopLoop>[0]): void {
   state.pendingFeedbackTurn = null;
   state.contextUsage = null;
   state.stepHistory = [];
-  state.aceRun = null;
   state.stopReason = "cleared by user";
 }

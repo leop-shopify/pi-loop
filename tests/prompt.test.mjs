@@ -42,7 +42,7 @@ test("continue prompt includes score, blockers, next actions, and budget", () =>
   assert.match(prompt, /prefer several small read-only research\/review lanes over one broad/);
   assert.match(prompt, /What was tried: inspected scorer; ran partial checks/);
   assert.match(prompt, /What did not improve enough:/);
-  assert.match(prompt, /Strategy rule: use ACE context and feedback-scoring output/);
+  assert.match(prompt, /Strategy rule: use prior feedback and feedback-scoring output to choose a genuinely different, verifiable slice after failure or plateau/);
 });
 
 test("continue prompt turns review-gate failures into bounded review guidance", () => {
@@ -94,18 +94,6 @@ test("continue prompt rewrites stale stop-on-progress scorer actions", () => {
   assert.doesNotMatch(prompt, /verify percent improvement before stopping/);
 });
 
-test("continue prompt includes ACE context when provided", () => {
-  const prompt = continuePrompt(loopState({
-    totalTurnsStarted: 1,
-    turnsStarted: 1,
-    results: [scoreEntry({ turn: 1, score: 70, progressPercent: null })],
-  }), { aceContext: "## ACE Loop Context\n\nPrefer short verifiable slices." });
-
-  assert.match(prompt, /## ACE Loop Context/);
-  assert.match(prompt, /Prefer short verifiable slices\./);
-  assert.match(prompt, /verify one slice, record loop_feedback, and carry unfinished work or partial research into the next feedback attempt\./);
-});
-
 test("kickoff prompt starts with acceptance discovery and bounded spawned-agent research guidance", () => {
   const prompt = kickoffPrompt(loopState());
 
@@ -122,6 +110,7 @@ test("kickoff prompt starts with acceptance discovery and bounded spawned-agent 
   assert.match(prompt, /delegation itself is not progress evidence/);
   assert.match(prompt, /prefer several small read-only research\/review lanes over one broad/);
   assert.match(prompt, /explicit report deadline before timeout/);
+  assert.match(prompt, /use prior feedback and feedback-scoring output when available to choose the next strategy/);
 });
 
 test("system prompt advertises acceptance discovery, short capped defaults, and bounded spawned-agent pacing", () => {
@@ -148,6 +137,7 @@ test("next run prompt carries bounded research guidance forward", () => {
 
   assert.match(prompt, /Bounded research\/delegation rule/);
   assert.match(prompt, /move unfinished research into the next feedback attempt/);
+  assert.match(prompt, /prior feedback and feedback-scoring output to choose a genuinely different, verifiable slice after failure or plateau/);
 });
 
 test("delegation pending prompt refuses to score spawn-only turns", () => {

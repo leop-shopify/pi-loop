@@ -104,7 +104,6 @@ function dataLines(state: LoopRuntimeState, width: number, theme: Theme): string
     keyValueLine("tokens", contextUsageText(state), width, theme),
     keyValueLine("progress", `${progressText} ${bar}`, width, theme),
     keyValueLine("best", bestText, width, theme),
-    keyValueLine("ace", aceRunText(state), width, theme),
     ...recentTurnLines(state, width, theme),
   ];
 }
@@ -182,13 +181,6 @@ function recentTurnLines(state: LoopRuntimeState, width: number, theme: Theme): 
   if (state.turnDurations.length === 0) return [];
   const recent = state.turnDurations.slice(-4).map((entry) => `#${entry.globalTurn} ${formatElapsed(entry.durationMs)}`).join(", ");
   return keyValueWrappedLines("recent", recent, width, theme);
-}
-
-function aceRunText(state: LoopRuntimeState): string {
-  const run = state.aceRun;
-  if (!run) return "not launched";
-  if (run.status === "running") return run.pid !== undefined ? `running pid ${run.pid}` : "running";
-  return run.message ?? run.status;
 }
 
 function contextUsageText(state: LoopRuntimeState): string {

@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import childProcess from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import piLoopExtension from "../extensions/pi-loop/intelligent-goal.ts";
 import { RESUME_DELAY_MS } from "../extensions/pi-loop/constants.ts";
+import { registerLoopEvents } from "../extensions/pi-loop/events.ts";
 import { appendLogEntry, deleteLog, readLogEntries } from "../extensions/pi-loop/log.ts";
 
 async function withTempDir(fn) {
@@ -72,6 +75,106 @@ test("legacy loop_feedback without acceptance fields stays scoreable and unstruc
     assert.equal(scores.at(-1).attempt.acceptanceStatus, undefined);
     assert.equal(scores.at(-1).attempt.acceptanceCriteria, undefined);
     assert.equal(scores.at(-1).attempt.planTasks, undefined);
+  });
+});
+
+test("Goal ignores legacy adapter storage and a stale-resolvable adapter under hostile runtime tripwires", async () => {
+  await withTempDir(async (dir) => {
+    writeProject(dir);
+    const adapterName = ["pi", "ace", "adapter"].join("-");
+    const legacyRoot = join(dir, ".pi", "ace");
+    const adapterRoot = join(dir, "node_modules", adapterName);
+    const importMarker = join(dir, "adapter-imported");
+    const sentinel = "HOSTILE_ADAPTER_SENTINEL_MUST_NOT_APPEAR";
+    mkdirSync(join(legacyRoot, "playbooks", "default"), { recursive: true });
+    writeFileSync(join(legacyRoot, "config.json"), JSON.stringify({ enabled: true, selectedPlaybook: "default" }));
+    writeFileSync(join(legacyRoot, "playbooks", "default", "current.txt"), sentinel);
+    mkdirSync(adapterRoot, { recursive: true });
+    writeFileSync(join(adapterRoot, "package.json"), JSON.stringify({ name: adapterName, type: "module", exports: { "./context": "./context.js" } }));
+    writeFileSync(join(adapterRoot, "context.js"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(importMarker)}, "imported"); export async function resolveAcePromptContext() { return { text: ${JSON.stringify(sentinel)} }; }\n`);
+    assert.match(createRequire(join(dir, "probe.cjs")).resolve(`${adapterName}/context`), new RegExp(`node_modules/${adapterName}/context\\.js$`));
+
+    const forbiddenSource = [
+      adapterName,
+      [".", "pi", "ace"].join("/"),
+      ["build", "Ace", "Loop", "Context"].join(""),
+      ["launch", "Ace", "For", "Loop"].join(""),
+      ["ACE", "_LOOP_CONTEXT_CHAR_CAP"].join(""),
+      ["ace", "_run_"].join(""),
+    ];
+    for (const sourcePath of ["loop-command.ts", "events.ts", "prompt.ts", "state.ts", "log.ts", "ui.ts", "constants.ts"]) {
+      const source = readFileSync(new URL(`../extensions/pi-loop/${sourcePath}`, import.meta.url), "utf8");
+      for (const token of forbiddenSource) assert.doesNotMatch(source, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+    }
+
+    const pi = mockPi();
+    const emitted = [];
+    pi.events.emit = (channel) => {
+      emitted.push(channel);
+      if (channel === `${adapterName}:launch-daemon`) throw new Error("adapter event emission attempted");
+    };
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalLaunchers = Object.fromEntries(["spawn", "exec", "execFile", "fork"].map((name) => [name, childProcess[name]]));
+    const oneSecondTimers = [];
+    const processLaunches = [];
+    globalThis.setTimeout = ((handler, delay, ...args) => {
+      if (delay === 1_000) {
+        oneSecondTimers.push(delay);
+        throw new Error("legacy one-second adapter timeout attempted");
+      }
+      return originalSetTimeout(handler, delay, ...args);
+    });
+    for (const name of Object.keys(originalLaunchers)) childProcess[name] = (...args) => {
+      processLaunches.push({ name, args });
+      throw new Error(`unexpected process launch through ${name}`);
+    };
+
+    try {
+      piLoopExtension(pi);
+      await pi.commands.get("goal").handler("Improve source.ts --minutes=10 --turns=2", mockContext(dir));
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      for (const [name, fn] of Object.entries(originalLaunchers)) childProcess[name] = fn;
+    }
+
+    assert.deepEqual(emitted, []);
+    assert.deepEqual(oneSecondTimers, []);
+    assert.deepEqual(processLaunches, []);
+    assert.equal(existsSync(importMarker), false);
+    assert.doesNotMatch(pi.sentMessages[0].text, new RegExp(sentinel));
+    assert.doesNotMatch(pi.sentMessages[0].text, new RegExp(["A", "CE"].join(""), "i"));
+    assert.equal(readLogEntries(dir).some((entry) => typeof entry.event === "string" && entry.event.startsWith(["ace", "run"].join("_"))), false);
+  });
+});
+
+test("spawn-only turns wait for agent reports instead of forcing a missing-score prompt", async () => {
+  await withTempDir(async (dir) => {
+    const pi = mockPi();
+    const state = loopState({ results: [], unscoredConsecutiveTurns: 1 });
+    const scheduled = [];
+    const controller = {
+      getState: () => state,
+      enforceLimits: () => false,
+      scheduleResume: (_ctx, _state, message) => scheduled.push(message),
+    };
+
+    registerLoopEvents(pi, controller);
+    await pi.events.get("agent_end")({
+      messages: [{
+        role: "assistant",
+        content: [{ type: "toolCall", id: "spawn-1", name: "spawn_agent", arguments: { prompt: "Inspect one narrow lane." } }],
+        timestamp: Date.now(),
+      }],
+    }, mockContext(dir));
+
+    assert.equal(scheduled.length, 0);
+    assert.equal(state.unscoredConsecutiveTurns, 0);
+    assert.match(state.currentPrompt, /spawn-only turn is not scoreable progress/);
+    assert.deepEqual(pi.stepMessages.map((message) => message.content), [
+      "Step: review loop — loop 1, acceptance turn 1, total 1",
+      "Step: delegation pending — spawned agents are running; waiting for focused reports before feedback",
+    ]);
+    assert.equal(readLogEntries(dir).find((entry) => entry.event === "delegation_pending")?.event, "delegation_pending");
   });
 });
 
@@ -307,6 +410,40 @@ test("missing score and premature completion claims are logged", async () => {
     assert.equal(entries.at(-1).reason, "completion claim before configured loop stop");
   });
 });
+
+function loopState(overrides = {}) {
+  return {
+    active: true,
+    goal: "harden scorer",
+    targetScore: 90,
+    maxTurns: 2,
+    maxMinutes: 10,
+    maxRuns: 1,
+    currentRun: 1,
+    totalTurnsStarted: 1,
+    startedAt: Date.now(),
+    turnsStarted: 1,
+    lastAgentStartScoreCount: 0,
+    unscoredConsecutiveTurns: 0,
+    pendingFeedbackTurn: null,
+    pendingResumeTimer: null,
+    pausedMs: 0,
+    timerPausedAt: null,
+    stopReason: null,
+    targetContext: null,
+    runs: [{ index: 1, startedAt: Date.now(), turnsStarted: 1 }],
+    prematureStopCount: 0,
+    currentPrompt: null,
+    currentTurnStartedAt: null,
+    lastTurnDurationMs: null,
+    turnDurations: [],
+    contextUsage: null,
+    stepHistory: [],
+    panelVisible: true,
+    results: [],
+    ...overrides,
+  };
+}
 
 function legacyScoreEntry() {
   return {

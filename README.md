@@ -45,7 +45,7 @@ The default bounds are ten active-agent minutes, twelve normal work turns, and o
 
 ### How Goal mode works
 
-1. Captures target files, symbols, checks, package scripts, numeric objectives, prior attempts, and available ACE context.
+1. Captures target files, symbols, checks, package scripts, numeric objectives, and prior attempts.
 2. Opens the non-capturing right-side floating panel.
 3. Starts with acceptance discovery when the expected outcome is not yet confirmed.
 4. Exposes `loop_feedback` while the Goal is active.
@@ -71,7 +71,6 @@ The original floating panel remains part of Goal mode. It shows:
 - elapsed and recent turn time
 - context usage
 - latest and best progress
-- ACE state
 - current prompt
 - persisted step history
 
@@ -82,10 +81,6 @@ The panel is right-centered, non-capturing, 25% wide, at least 36 columns, and h
 `loop_feedback` records focused attempt evidence, acceptance status, criteria, plan tasks, measured metrics, hypothesis, verdict, blockers, and next actions. Heavy implementation or verification work belongs in normal tools; the feedback tool records the checkpoint.
 
 A completion claim requires confirmed acceptance criteria and completed plan tasks. Later turns try to falsify that claim from different angles and can reopen normal iteration when evidence fails.
-
-### ACE integration
-
-ACE context loading and launch events remain supported through the original bridge and bundled proof assets. The external `pi-ace-adapter` package is optional: pi-loop loads compatible project or global ACE storage when available and continues without blocking when the adapter is absent.
 
 ## Scheduled Loops
 
@@ -182,6 +177,10 @@ Entries retain the original config, score, event, session, run, turn, evidence, 
 There is no background daemon. Scheduled work that must run while Pi or the computer is closed requires an external scheduler or durable automation service.
 
 ## Migration
+
+### 1.0.0
+
+The `pi-ace-adapter` integration has been removed. pi-loop no longer reads adapter storage or starts the adapter. Existing `.pi/ace` files and historical `ace_run_*` log entries are ignored; pi-loop does not delete them.
 
 Older pi-loop releases used `/loop <goal>`. Goal text without an interval is no longer silently interpreted as a schedule:
 

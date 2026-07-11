@@ -1,6 +1,5 @@
 import type { AgentEndEvent, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { buildAceLoopContext } from "./ace-context.ts";
 import { createAgentEndGate, type AgentEndGate } from "./agent-end-gate.ts";
 import { MAX_UNSCORED_REMINDERS } from "./constants.ts";
 import type { LoopController } from "./controller.ts";
@@ -91,8 +90,7 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController,
       if (!acceptanceReady(state)) {
         state.unscoredConsecutiveTurns = 0;
         sendLoopStepMessage(pi, state, "planning acceptance criteria", "acceptance criteria must be clear and trackable before agent work starts", ctx.cwd);
-        const aceContext = await buildAceLoopContext(ctx);
-        controller.scheduleResume(ctx, state, continuePrompt(state, { aceContext }));
+        controller.scheduleResume(ctx, state, continuePrompt(state));
         return;
       }
 
@@ -109,8 +107,7 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController,
 
     if (!acceptanceReady(state)) {
       sendLoopStepMessage(pi, state, "planning acceptance criteria", "acceptance criteria not ready for normal agent work", ctx.cwd);
-      const aceContext = await buildAceLoopContext(ctx);
-      controller.scheduleResume(ctx, state, continuePrompt(state, { aceContext }));
+      controller.scheduleResume(ctx, state, continuePrompt(state));
       return;
     }
 
@@ -121,8 +118,7 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController,
       appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "run_started", timestamp: Date.now(), run: state.currentRun });
       updateLoopWidget(ctx, state);
       sendLoopStepMessage(pi, state, `restarting loop ${state.currentRun}`, `run ${state.currentRun}/${state.maxRuns}`, ctx.cwd);
-      const aceContext = await buildAceLoopContext(ctx);
-      controller.scheduleResume(ctx, state, nextRunPrompt(state, { aceContext }));
+      controller.scheduleResume(ctx, state, nextRunPrompt(state));
       return;
     }
 
@@ -131,14 +127,12 @@ export function registerLoopEvents(pi: ExtensionAPI, controller: LoopController,
       state.prematureStopCount++;
       appendLogEntry(ctx.cwd, { type: "event", schemaVersion: 2, event: "premature_stop", timestamp: Date.now(), run: state.currentRun, turn: state.turnsStarted, globalTurn: state.totalTurnsStarted, score: last?.score, targetScore: last?.targetScore, reason: "completion claim before configured loop stop" });
       sendLoopStepMessage(pi, state, "continuing loop", "completion claim before configured stop", ctx.cwd);
-      const aceContext = await buildAceLoopContext(ctx);
-      controller.scheduleResume(ctx, state, `${prematureStopPrompt(state)}\n\n${continuePrompt(state, { aceContext })}`);
+      controller.scheduleResume(ctx, state, `${prematureStopPrompt(state)}\n\n${continuePrompt(state)}`);
       return;
     }
 
     sendLoopStepMessage(pi, state, "continuing loop", "scheduled refined prompt", ctx.cwd);
-      const aceContext = await buildAceLoopContext(ctx);
-      controller.scheduleResume(ctx, state, continuePrompt(state, { aceContext }));
+      controller.scheduleResume(ctx, state, continuePrompt(state));
     });
   });
 
